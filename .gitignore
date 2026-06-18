@@ -1,0 +1,40 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.env
+.venv/
+venv/
+
+# Local OS files
+.DS_Store
+Thumbs.db
+
+# Logs and local temp
+*.log
+.cache/
+temp/
+output/
+input/
+
+# IDE files
+.vscode/
+.idea/
+
+# Model and generated asset files
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.bin
+*.onnx
+*.gguf
+*.mp4
+*.mov
+*.avi
+*.webm
+
+# Keep empty folders with .gitkeep
+!.gitkeep

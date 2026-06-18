@@ -1,0 +1,6 @@
+# Keep this minimal.
+# Do not add torch here unless the node absolutely requires a different package.
+# ComfyUI already manages torch and CUDA packages.
+
+Pillow>=10.0.0
+numpy>=1.24.0
