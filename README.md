@@ -43,6 +43,70 @@ After copying this folder into `custom_nodes`, restart ComfyUI and look for:
 mAI / Template / Example Text Node
 ```
 
+## mAI Composite Layer
+
+Location:
+
+```text
+mAI / Image
+```
+
+Purpose:
+Composites one image layer over one base image.
+Use multiple copies of the node chained together to create multi-layer compositions.
+
+Inputs:
+
+* `base_image`
+* optional `base_mask`
+* `layer_image`
+* optional `layer_mask`
+
+Widgets:
+
+* `x`
+* `y`
+* `scale`
+* `opacity`
+* `anchor`
+* `fit_mode`
+
+Outputs:
+
+* `image`
+* `mask`
+
+Transparency:
+
+* Uses `layer_mask` if connected.
+* Otherwise uses embedded alpha if the layer image has 4 channels.
+* Otherwise treats the layer as opaque.
+
+Mask:
+
+* The mask output is the placed foreground alpha.
+* If `base_mask` is connected, the output mask combines `base_mask` and the current layer alpha.
+* This makes it possible to chain masks across multiple Composite Layer nodes.
+
+Why this replaced Image Layer Stack:
+
+The old 8-layer fixed stack created a huge ComfyUI node.
+The new chainable node is smaller, easier to control, and supports unlimited layers by duplication.
+
+Notes:
+
+* Output is RGB.
+* Transparent PNG style layers are supported when ComfyUI passes alpha channels.
+* Negative `x` and `y` are supported.
+* Layers can be partially outside the background.
+* The old `mAI Image Layer Stack` implementation remains in the codebase but is not registered by default.
+
+Test command:
+
+```powershell
+python -m pytest
+```
+
 ## Development rule
 
 Keep each custom node pack as its own Git repo.
