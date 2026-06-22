@@ -107,6 +107,49 @@ Test command:
 python -m pytest
 ```
 
+## mAI Save Text File
+
+Location:
+
+```text
+mAI / IO
+```
+
+Purpose:
+Saves a text string to a file using UTF-8 encoding.
+
+Inputs:
+
+* `text`
+* `file_name`
+* `folder`
+* `overwrite`
+
+Outputs:
+
+* `file_path`
+* `saved`
+
+Default behavior:
+
+* Saves into the current working directory when `folder` is empty.
+* Creates `folder` if it does not exist.
+* Uses the exact provided `file_name`.
+* Does not add timestamps or change the file name.
+* Does not auto-add `.txt`; include `.txt` in `file_name` when wanted.
+* Raises `FileExistsError` when `overwrite` is false and the target file already exists.
+
+Known limitations:
+
+* `file_name` must be a simple file name, not a nested or absolute path.
+* Put folder paths in `folder`, not in `file_name`.
+
+Test command:
+
+```powershell
+python -m pytest
+```
+
 ## Development rule
 
 Keep each custom node pack as its own Git repo.
