@@ -150,6 +150,43 @@ Test command:
 python -m pytest
 ```
 
+## mAI Random Line
+
+Location:
+
+```text
+mAI / Utils
+```
+
+Purpose:
+Returns one random non-empty line from multiline text.
+
+Inputs:
+
+* `text`
+
+Outputs:
+
+* `line`
+
+Default behavior:
+
+* Uses Windows and Unix line endings.
+* Ignores empty and whitespace-only lines.
+* Preserves the selected line text except for the removed line break.
+* Returns an empty string when there are no non-empty lines.
+* Produces a fresh random choice on each queued execution.
+
+Known limitations:
+
+* There is no visible seed input, so results are intentionally not reproducible.
+
+Test command:
+
+```powershell
+python -m pytest
+```
+
 ## Development rule
 
 Keep each custom node pack as its own Git repo.

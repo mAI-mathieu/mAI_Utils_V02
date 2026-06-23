@@ -1,11 +1,13 @@
 from .nodes.composite_layer_node import MAICompositeLayer
 from .nodes.example_text_node import MAIExampleTextNode
+from .nodes.random_line_node import MAIRandomLine
 from .nodes.save_text_file_node import MAISaveTextFile
 from .nodes.type_converter_node import MAITypeConverterNode
 
 NODE_CLASS_MAPPINGS = {
     "MAICompositeLayer": MAICompositeLayer,
     "MAIExampleTextNode": MAIExampleTextNode,
+    "MAIRandomLine": MAIRandomLine,
     "MAISaveTextFile": MAISaveTextFile,
     "MAITypeConverterNode": MAITypeConverterNode,
 }
@@ -13,6 +15,7 @@ NODE_CLASS_MAPPINGS = {
 NODE_DISPLAY_NAME_MAPPINGS = {
     "MAICompositeLayer": "mAI Composite Layer",
     "MAIExampleTextNode": "mAI Example Text Node",
+    "MAIRandomLine": "mAI Random Line",
     "MAISaveTextFile": "mAI Save Text File",
     "MAITypeConverterNode": "mAI Type Converter",
 }
