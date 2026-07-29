@@ -180,6 +180,55 @@ Known limitations:
 
 * There is no visible seed input, so results are intentionally not reproducible.
 
+## mAI text sequence randomizer
+
+Location:
+
+```text
+mAI / Text
+```
+
+Purpose:
+Randomize the order of items in a text sequence with a reproducible seed.
+
+Inputs:
+
+* `text`
+* `separator` (`comma` or `line break`)
+* `seed`
+
+Output:
+
+* `text`
+
+Default behavior:
+
+* Uses comma-separated items by default.
+* Trims whitespace around each item and ignores empty items.
+* Joins comma-separated output with a comma and one space.
+* A fixed seed always produces the same order for the same text and separator.
+* The seed widget supports ComfyUI's Fixed, Increment, Decrement, and Randomize modes.
+* Returns an empty string when there are no non-empty items.
+
+Example:
+
+Input:
+
+```text
+text 1, text 2, text 3
+```
+
+Possible output:
+
+```text
+text 2, text 1, text 3
+```
+
+Known limitations:
+
+* Commas inside an item are treated as separators in `comma` mode.
+* Random shuffling can occasionally leave the sequence in its original order.
+
 ## mAI Example Text Node
 
 Location:

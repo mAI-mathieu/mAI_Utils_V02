@@ -2,6 +2,7 @@ from .nodes.composite_layer_node import MAICompositeLayer
 from .nodes.example_text_node import MAIExampleTextNode
 from .nodes.random_line_node import MAIRandomLine
 from .nodes.save_text_file_node import MAISaveTextFile
+from .nodes.text_sequence_randomizer import MAITextSequenceRandomizer
 from .nodes.type_converter_node import MAITypeConverterNode
 
 NODE_CLASS_MAPPINGS = {
@@ -9,6 +10,7 @@ NODE_CLASS_MAPPINGS = {
     "MAIExampleTextNode": MAIExampleTextNode,
     "MAIRandomLine": MAIRandomLine,
     "MAISaveTextFile": MAISaveTextFile,
+    "MAITextSequenceRandomizer": MAITextSequenceRandomizer,
     "MAITypeConverterNode": MAITypeConverterNode,
 }
 
@@ -17,6 +19,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MAIExampleTextNode": "mAI Example Text Node",
     "MAIRandomLine": "mAI Random Line",
     "MAISaveTextFile": "mAI Save Text File",
+    "MAITextSequenceRandomizer": "mAI text sequence randomizer",
     "MAITypeConverterNode": "mAI Type Converter",
 }
 
