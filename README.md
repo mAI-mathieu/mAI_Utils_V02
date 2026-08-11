@@ -5,6 +5,39 @@ ComfyUI custom node pack for small, reusable mAI utility nodes.
 Install this folder under ComfyUI's `custom_nodes` directory, then restart ComfyUI.
 The currently registered nodes are listed below.
 
+## mAI prepare image for Minimax H3
+
+Location:
+
+```text
+mAI / Image
+```
+
+Purpose:
+Resize an image for Minimax H3 while keeping its proportions as close as possible
+and ensuring that both output dimensions are multiples of 32.
+
+Inputs:
+
+* `image`
+* `target_megapixels` (`0.2 MP` through `2.0 MP` in `0.1 MP` steps)
+
+Output:
+
+* `image`
+
+Default behavior:
+
+* Targets approximately `1.0 MP` by default (`1024 × 1024` total pixels in ComfyUI's convention).
+* Calculates a proportional target size, then rounds width and height to the nearest multiples of 32.
+* Uses Lanczos resampling without cropping.
+* Supports image batches.
+
+Known limitations:
+
+* Rounding both dimensions to a 32-pixel grid can introduce a small aspect-ratio difference.
+* The selected megapixel value is approximate because valid output dimensions are discrete.
+
 ## mAI Composite Layer
 
 Location:

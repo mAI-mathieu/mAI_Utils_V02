@@ -1,5 +1,6 @@
 from .nodes.composite_layer_node import MAICompositeLayer
 from .nodes.example_text_node import MAIExampleTextNode
+from .nodes.prepare_image_for_minimax_h3 import MAIPrepareImageForMinimaxH3
 from .nodes.random_line_node import MAIRandomLine
 from .nodes.save_text_file_node import MAISaveTextFile
 from .nodes.text_sequence_randomizer import MAITextSequenceRandomizer
@@ -8,6 +9,7 @@ from .nodes.type_converter_node import MAITypeConverterNode
 NODE_CLASS_MAPPINGS = {
     "MAICompositeLayer": MAICompositeLayer,
     "MAIExampleTextNode": MAIExampleTextNode,
+    "MAIPrepareImageForMinimaxH3": MAIPrepareImageForMinimaxH3,
     "MAIRandomLine": MAIRandomLine,
     "MAISaveTextFile": MAISaveTextFile,
     "MAITextSequenceRandomizer": MAITextSequenceRandomizer,
@@ -17,6 +19,7 @@ NODE_CLASS_MAPPINGS = {
 NODE_DISPLAY_NAME_MAPPINGS = {
     "MAICompositeLayer": "mAI Composite Layer",
     "MAIExampleTextNode": "mAI Example Text Node",
+    "MAIPrepareImageForMinimaxH3": "mAI prepare image for Minimax H3",
     "MAIRandomLine": "mAI Random Line",
     "MAISaveTextFile": "mAI Save Text File",
     "MAITextSequenceRandomizer": "mAI text sequence randomizer",
