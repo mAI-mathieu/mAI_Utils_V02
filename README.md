@@ -90,6 +90,38 @@ Known limitations:
 
 * The old `mAI Image Layer Stack` implementation remains in the codebase but is not registered by default.
 
+## mAI mask bounding box
+
+Location:
+
+```text
+mAI / Mask
+```
+
+Purpose:
+Create a pure white, filled rectangular mask covering the bounding box of the
+original mask's nonzero pixels.
+
+Input:
+
+* `mask`
+
+Output:
+
+* `mask`
+
+Default behavior:
+
+* Treats every input value greater than zero as part of the mask.
+* Fills the smallest axis-aligned rectangle containing those pixels with white (`1.0`).
+* Keeps pixels outside the rectangle black (`0.0`).
+* Processes each mask in a batch independently.
+* Returns an empty mask when the input mask is empty.
+
+Known limitations:
+
+* Very small positive mask values count toward the bounding box.
+
 ## mAI Save Text File
 
 Location:
