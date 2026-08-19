@@ -5,6 +5,112 @@ ComfyUI custom node pack for small, reusable mAI utility nodes.
 Install this folder under ComfyUI's `custom_nodes` directory, then restart ComfyUI.
 The currently registered nodes are listed below.
 
+## mAI Inpaint Crop - Separate Stitch Mask
+
+Location:
+
+```text
+mAI / Image
+```
+
+Purpose:
+Crop an image using the current `ComfyUI-Inpaint-CropAndStitch` workflow while
+generating a separate full-size stitch/blend mask inside the node.
+
+```text
+render mask = what the model edits
+stitch mask = where the generated result is blended back
+```
+
+The generated stitch mask has two modes:
+
+* `rectangle (full crop)` blends the complete cropped rectangle back into the
+  source image.
+* `extended mask` follows the render-mask shape, expands it with
+  `stitch_mask_expand_pixels`, and ensures the crop is large enough to contain
+  that expanded region.
+
+Only `cropped_mask` is sent to the inpainting model.
+`stitch_mask_blend_pixels` feathers the generated stitch boundary in either
+mode.
+
+Inputs:
+
+* All current inputs from the installed upstream `Inpaint Crop` node.
+* `stitch_mask_mode` (`rectangle (full crop)` or `extended mask`)
+* `stitch_mask_expand_pixels` (used by `extended mask`, default `32`)
+* `stitch_mask_blend_pixels` (default `32`)
+
+Outputs:
+
+* `stitcher`
+* `cropped_image`
+* `cropped_mask` (the render/inpainting mask)
+* `cropped_stitch_mask` (the exact mask stored in the stitcher for compositing)
+
+Example workflow:
+
+```text
+IMAGE ─────────────────────────────┐
+                                  │
+RENDER MASK ──────────────────────┤
+                                  ▼
+                     mAI Inpaint Crop
+                                  │
+                    ┌─────────────┼──────────────────────┐
+                    │             │                      │
+              cropped image   render mask            STITCHER
+                    │             │            (internal stitch mask)
+                    └──────► IMAGE MODEL                 │
+                              │                          │
+                              ▼                          │
+                       rendered crop                     │
+                              │                          │
+                              └────────► Inpaint Stitch ◄┘
+                                               │
+                                               ▼
+                                          FINAL IMAGE
+```
+
+Connect `stitcher` and the model's rendered crop to the standard upstream
+`Inpaint Stitch` node. `cropped_stitch_mask` previews the exact internally
+generated mask used by that stitch operation.
+
+Known limitations:
+
+* This integration follows the locally installed upstream v3 stitcher format and
+  requires the `cropped_mask_for_blend` field exposed by that format.
+* The optional dependency must be available when ComfyUI loads this node pack.
+
+### CropAndStitch dependency installation
+
+`ComfyUI-Inpaint-CropAndStitch` must also be installed. It is intentionally not
+listed in `requirements.txt` because it is a separate ComfyUI custom-node pack.
+
+Recommended installation:
+
+```text
+ComfyUI Manager
+→ search for ComfyUI-Inpaint-CropAndStitch
+→ install
+→ restart ComfyUI
+```
+
+Manual installation, following the current upstream README:
+
+```powershell
+cd ComfyUI\custom_nodes
+git clone https://github.com/lquesada/ComfyUI-Inpaint-CropAndStitch.git
+```
+
+Restart ComfyUI after installation. If the dependency is absent, this node is
+skipped and the rest of mAI Utils continues to load.
+
+Acknowledgment: this node integrates with
+[`ComfyUI-Inpaint-CropAndStitch`](https://github.com/lquesada/ComfyUI-Inpaint-CropAndStitch),
+which is licensed under GNU GPL v3. No upstream source or license text is
+vendored here.
+
 ## mAI prepare image for Minimax H3
 
 Location:

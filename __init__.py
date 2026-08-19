@@ -6,6 +6,24 @@ from .nodes.random_line_node import MAIRandomLine
 from .nodes.save_text_file_node import MAISaveTextFile
 from .nodes.text_sequence_randomizer import MAITextSequenceRandomizer
 from .nodes.type_converter_node import MAITypeConverterNode
+from .utils.cropandstitch_dependency import CropAndStitchDependencyError
+
+try:
+    from .nodes.inpaint_crop_separate_stitch_mask import (
+        MAIInpaintCropSeparateStitchMask,
+    )
+except CropAndStitchDependencyError as exc:
+    MAIInpaintCropSeparateStitchMask = None
+    if exc.missing:
+        print(
+            "[mAI] mAI Inpaint Crop - Separate Stitch Mask was not loaded "
+            "because ComfyUI-Inpaint-CropAndStitch is not installed."
+        )
+    else:
+        print(
+            "[mAI] mAI Inpaint Crop - Separate Stitch Mask was not loaded: "
+            f"{exc}"
+        )
 
 NODE_CLASS_MAPPINGS = {
     "MAICompositeLayer": MAICompositeLayer,
@@ -28,6 +46,14 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MAITextSequenceRandomizer": "mAI text sequence randomizer",
     "MAITypeConverterNode": "mAI Type Converter",
 }
+
+if MAIInpaintCropSeparateStitchMask is not None:
+    NODE_CLASS_MAPPINGS["MAIInpaintCropSeparateStitchMask"] = (
+        MAIInpaintCropSeparateStitchMask
+    )
+    NODE_DISPLAY_NAME_MAPPINGS["MAIInpaintCropSeparateStitchMask"] = (
+        "mAI Inpaint Crop - Separate Stitch Mask"
+    )
 
 # MAIImageLayerStack remains in nodes/image_layer_stack_node.py, but is not
 # registered by default because the compact chainable node replaces its tall UI.
