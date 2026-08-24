@@ -127,6 +127,7 @@ Inputs:
 
 * `image`
 * `target_megapixels` (`0.2 MP` through `2.0 MP` in `0.1 MP` steps)
+* `resize_mode` (`Target megapixels` or `Short side 768 px`)
 
 Output:
 
@@ -138,6 +139,10 @@ Default behavior:
 * Calculates a proportional target size, then rounds width and height to the nearest multiples of 32.
 * Uses Lanczos resampling without cropping.
 * Supports image batches.
+
+With `Short side 768 px` selected, the megapixel value is ignored. The shorter
+dimension is set to exactly 768 pixels and the longer dimension is rounded to
+the nearest multiple of 32.
 
 Known limitations:
 

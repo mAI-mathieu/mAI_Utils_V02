@@ -1,7 +1,21 @@
 try:
-    from ..utils.minimax_h3 import MEGAPIXEL_OPTIONS, calculate_minimax_h3_dimensions
+    from ..utils.minimax_h3 import (
+        MEGAPIXEL_OPTIONS,
+        RESIZE_MODE_MEGAPIXELS,
+        RESIZE_MODE_OPTIONS,
+        RESIZE_MODE_SHORT_SIDE_768,
+        calculate_minimax_h3_dimensions,
+        calculate_short_side_dimensions,
+    )
 except ImportError:
-    from utils.minimax_h3 import MEGAPIXEL_OPTIONS, calculate_minimax_h3_dimensions
+    from utils.minimax_h3 import (
+        MEGAPIXEL_OPTIONS,
+        RESIZE_MODE_MEGAPIXELS,
+        RESIZE_MODE_OPTIONS,
+        RESIZE_MODE_SHORT_SIDE_768,
+        calculate_minimax_h3_dimensions,
+        calculate_short_side_dimensions,
+    )
 
 
 class MAIPrepareImageForMinimaxH3:
@@ -16,20 +30,29 @@ class MAIPrepareImageForMinimaxH3:
             "required": {
                 "image": ("IMAGE",),
                 "target_megapixels": (list(MEGAPIXEL_OPTIONS), {"default": "1.0 MP"}),
+                "resize_mode": (
+                    list(RESIZE_MODE_OPTIONS),
+                    {"default": RESIZE_MODE_MEGAPIXELS},
+                ),
             }
         }
 
-    def prepare(self, image, target_megapixels):
+    def prepare(self, image, target_megapixels, resize_mode=RESIZE_MODE_MEGAPIXELS):
         if image.dim() != 4:
             raise ValueError("image must have shape [batch, height, width, channels]")
 
         height = image.shape[1]
         width = image.shape[2]
-        target_width, target_height = calculate_minimax_h3_dimensions(
-            width,
-            height,
-            target_megapixels,
-        )
+        if resize_mode == RESIZE_MODE_MEGAPIXELS:
+            target_width, target_height = calculate_minimax_h3_dimensions(
+                width,
+                height,
+                target_megapixels,
+            )
+        elif resize_mode == RESIZE_MODE_SHORT_SIDE_768:
+            target_width, target_height = calculate_short_side_dimensions(width, height)
+        else:
+            raise ValueError(f"Unknown resize mode: {resize_mode}")
 
         if width == target_width and height == target_height:
             return (image,)
