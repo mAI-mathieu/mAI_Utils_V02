@@ -1,3 +1,4 @@
+from .nodes.background_lighting_match import MAIBackgroundLightingMatch
 from .nodes.composite_layer_node import MAICompositeLayer
 from .nodes.example_text_node import MAIExampleTextNode
 from .nodes.mask_bounding_box import MAIMaskBoundingBox
@@ -27,6 +28,7 @@ except CropAndStitchDependencyError as exc:
         )
 
 NODE_CLASS_MAPPINGS = {
+    "MAIBackgroundLightingMatch": MAIBackgroundLightingMatch,
     "MAICompositeLayer": MAICompositeLayer,
     "MAIExampleTextNode": MAIExampleTextNode,
     "MAIMaskBoundingBox": MAIMaskBoundingBox,
@@ -39,6 +41,7 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
+    "MAIBackgroundLightingMatch": "mAI background lighting match",
     "MAICompositeLayer": "mAI Composite Layer",
     "MAIExampleTextNode": "mAI Example Text Node",
     "MAIMaskBoundingBox": "mAI mask bounding box",

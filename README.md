@@ -5,6 +5,49 @@ ComfyUI custom node pack for small, reusable mAI utility nodes.
 Install this folder under ComfyUI's `custom_nodes` directory, then restart ComfyUI.
 The currently registered nodes are listed below.
 
+## mAI background lighting match
+
+Location:
+
+```text
+mAI / Image
+```
+
+Purpose:
+Correct a brightness and contrast shift after inpainting. The node measures the
+untouched background in both the original and edited images, then applies the
+resulting lighting correction to the complete edited image.
+
+Inputs:
+
+* `original_image` — the image before inpainting
+* `edited_image` — the complete image after inpainting or object removal
+* `edit_mask` — white marks the edited area; black marks the untouched background
+
+Output:
+
+* `image` — the corrected edited image
+
+Default behavior:
+
+* Uses only the inverse of `edit_mask` for analysis.
+* Treats soft mask values as proportional background weights.
+* Matches the mean (brightness) and standard deviation (contrast) independently
+  for the red, green, and blue channels.
+* Applies one affine correction per RGB channel to every edited pixel, including
+  pixels inside the mask.
+* Supports image batches and broadcasts a batch of one where possible.
+
+Known limitations:
+
+* The original image, edited image, and mask must have matching dimensions.
+* The mask must leave some untouched background visible.
+* Contrast cannot be reconstructed if an edited background channel is completely
+  flat while the corresponding original channel has contrast; the node reports a
+  clear error in that case.
+* Output values are limited to `[0, 1]`. Clipping at the range boundaries can make
+  the final measured statistics differ slightly from the mathematical target.
+
 ## mAI video loader
 
 Location:
