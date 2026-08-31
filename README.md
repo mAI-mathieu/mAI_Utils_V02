@@ -317,6 +317,47 @@ Known limitations:
 
 * Very small positive mask values count toward the bounding box.
 
+## mAI mask outline
+
+Location:
+
+```text
+mAI / Mask
+```
+
+Purpose:
+Draw a colored outline that follows the mask's actual contour on the original
+image.
+
+Inputs:
+
+* `image` — the original image to annotate
+* `mask` — the shape to outline
+* `color` — outline color in `#RRGGBB` format (default `#00FF00`)
+* `thickness` — outline width in pixels (default `10`)
+* `padding` — pixels used to expand the mask shape before outlining (default `0`)
+* `threshold` — minimum included mask value on a `0` to `255` scale (default `0`)
+
+Output:
+
+* `image` — a copy of the input image with the outline drawn over it
+
+Default behavior:
+
+* Treats every mask value greater than the selected threshold as part of the shape.
+* Expands the mask by `padding` pixels before tracing its contour.
+* Centers even stroke widths across the contour; odd widths place the extra pixel inside.
+* Processes each batch item independently and broadcasts a batch of one where possible.
+* Leaves the image unchanged when the mask contains no included pixels.
+* Preserves additional image channels, including alpha; the outline changes RGB only.
+
+Known limitations:
+
+* The mask height and width must match the image.
+* `threshold` uses `0` to `255` while ComfyUI stores mask values internally as `0.0` to `1.0`.
+* The morphology uses square pixel neighborhoods, so heavily padded diagonal corners can look slightly squared.
+* Outlines and padding are clipped at image edges.
+
 ## mAI Save Text File
 
 Location:
