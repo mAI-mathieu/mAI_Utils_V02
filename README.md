@@ -5,6 +5,47 @@ ComfyUI custom node pack for small, reusable mAI utility nodes.
 Install this folder under ComfyUI's `custom_nodes` directory, then restart ComfyUI.
 The currently registered nodes are listed below.
 
+## mAI video loader
+
+Location:
+
+```text
+mAI / IO
+```
+
+Purpose:
+Upload or select a video from ComfyUI's input directory and decode it into a
+ComfyUI image batch, along with its source metadata and audio stream.
+
+Input:
+
+* `video`
+
+Outputs, in order:
+
+* `frames` (`IMAGE`) — all decoded video frames as one image batch
+* `fps` (`FLOAT`) — the video's average source frame rate
+* `audio` (`AUDIO`) — the decoded audio stream, or no value when the video has no audio
+* `frame_count` (`INT`) — the number of decoded frames
+* `width` (`INT`) — decoded frame width
+* `height` (`INT`) — decoded frame height
+
+Default behavior:
+
+* Lists video files in ComfyUI's input directory and provides a video upload button.
+* Uses ComfyUI's native video decoder and returns frames in
+  `[frame, height, width, channel]` format.
+* Applies video rotation metadata through ComfyUI's decoder before reporting width
+  and height.
+
+Known limitations:
+
+* The complete decoded frame sequence is held in memory; long or high-resolution
+  videos can require substantial RAM.
+* Variable-frame-rate sources report their average frame rate.
+* A video without an audio stream returns no `AUDIO` value. Nodes that require
+  audio should only be connected when the source contains audio.
+
 ## mAI Inpaint Crop - Separate Stitch Mask
 
 Location:

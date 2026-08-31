@@ -6,6 +6,7 @@ from .nodes.random_line_node import MAIRandomLine
 from .nodes.save_text_file_node import MAISaveTextFile
 from .nodes.text_sequence_randomizer import MAITextSequenceRandomizer
 from .nodes.type_converter_node import MAITypeConverterNode
+from .nodes.video_loader import MAIVideoLoader
 from .utils.cropandstitch_dependency import CropAndStitchDependencyError
 
 try:
@@ -34,6 +35,7 @@ NODE_CLASS_MAPPINGS = {
     "MAISaveTextFile": MAISaveTextFile,
     "MAITextSequenceRandomizer": MAITextSequenceRandomizer,
     "MAITypeConverterNode": MAITypeConverterNode,
+    "MAIVideoLoader": MAIVideoLoader,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -45,6 +47,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MAISaveTextFile": "mAI Save Text File",
     "MAITextSequenceRandomizer": "mAI text sequence randomizer",
     "MAITypeConverterNode": "mAI Type Converter",
+    "MAIVideoLoader": "mAI video loader",
 }
 
 if MAIInpaintCropSeparateStitchMask is not None:
