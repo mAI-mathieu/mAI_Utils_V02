@@ -12,6 +12,7 @@ from utils.separate_stitch_mask import (
     broadcast_inputs,
     crop_mask_with_stitcher_geometry,
     extend_mask,
+    full_crop_feather_mask,
     preresize_dimensions,
     stack_stitcher_masks,
 )
@@ -229,6 +230,19 @@ def test_stacked_preview_exactly_matches_stitcher_masks():
     assert torch.equal(preview[1], masks[1][0])
 
 
+def test_full_crop_feather_reaches_exact_black_with_unlimited_setting():
+    mask = full_crop_feather_mask(
+        1, 32, 48, 10000, torch.device("cpu"), torch.float32
+    )
+
+    assert torch.all(mask[:, 0, :] == 0.0)
+    assert torch.all(mask[:, -1, :] == 0.0)
+    assert torch.all(mask[:, :, 0] == 0.0)
+    assert torch.all(mask[:, :, -1] == 0.0)
+    assert mask[0, 15, 23] == 1.0
+    assert torch.any((mask > 0.0) & (mask < 1.0))
+
+
 def test_missing_dependency_raises_a_nonfatal_classified_error(monkeypatch):
     monkeypatch.setattr(cropandstitch_dependency, "_already_loaded_module", lambda: None)
     monkeypatch.setattr(cropandstitch_dependency, "_dependency_candidates", lambda: [])
@@ -412,5 +426,10 @@ def test_rectangle_mode_feathers_the_full_crop_boundary(cropandstitch_classes):
     center = cropped_stitch_mask[0, cropped_stitch_mask.shape[1] // 2, cropped_stitch_mask.shape[2] // 2]
     corner = cropped_stitch_mask[0, 0, 0]
     assert center > corner
+    assert center == 1.0
+    assert torch.all(cropped_stitch_mask[:, 0, :] == 0.0)
+    assert torch.all(cropped_stitch_mask[:, -1, :] == 0.0)
+    assert torch.all(cropped_stitch_mask[:, :, 0] == 0.0)
+    assert torch.all(cropped_stitch_mask[:, :, -1] == 0.0)
     assert torch.any((cropped_stitch_mask > 0.0) & (cropped_stitch_mask < 1.0))
     assert torch.equal(cropped_stitch_mask[0], stitcher["cropped_mask_for_blend"][0][0])

@@ -11,7 +11,7 @@ from ..utils.separate_stitch_mask import (
     broadcast_inputs,
     crop_mask_with_stitcher_geometry,
     extend_mask,
-    feather_mask,
+    full_crop_feather_mask,
     normalize_mask,
     preresize_dimensions,
     stack_stitcher_masks,
@@ -90,13 +90,13 @@ class MAIInpaintCropSeparateStitchMask(_UPSTREAM.InpaintCropImproved):
             processed_stitch_masks = []
             for _ in range(cropped_image.shape[0]):
                 # Rectangle mode deliberately covers the complete crop canvas.
-                full_crop_mask = torch.ones(
-                    (1, cropped_image.shape[1], cropped_image.shape[2]),
-                    device=processing_device,
-                    dtype=torch.float32,
-                )
-                full_crop_mask = feather_mask(
-                    full_crop_mask, int(stitch_mask_blend_pixels), processor
+                full_crop_mask = full_crop_feather_mask(
+                    1,
+                    cropped_image.shape[1],
+                    cropped_image.shape[2],
+                    int(stitch_mask_blend_pixels),
+                    processing_device,
+                    torch.float32,
                 )
                 processed_stitch_masks.append(full_crop_mask.cpu())
 

@@ -214,7 +214,13 @@ def feather_mask(mask: torch.Tensor, blend_pixels: int, processor: object) -> to
     if blend_pixels <= 0:
         return mask.float().clamp(0.0, 1.0)
 
-    padding = max(1, int(blend_pixels))
+    # Feathering cannot usefully exceed half of the available crop. Limiting the
+    # working radius to that geometric maximum avoids huge temporary tensors
+    # while leaving the UI control unrestricted.
+    effective_blend = min(
+        int(blend_pixels), max(1, min(mask.shape[1], mask.shape[2]) // 2)
+    )
+    padding = effective_blend
     padded = torch.zeros(
         (
             mask.shape[0],
@@ -225,10 +231,51 @@ def feather_mask(mask: torch.Tensor, blend_pixels: int, processor: object) -> to
         dtype=mask.dtype,
     )
     padded[:, padding:-padding, padding:-padding] = mask
-    padded = processor.blur_m(padded, blend_pixels * 0.5)
-    return padded[
+    padded = processor.blur_m(padded, effective_blend * 0.5)
+    feathered = padded[
         :, padding : padding + mask.shape[1], padding : padding + mask.shape[2]
-    ].float().clamp(0.0, 1.0)
+    ]
+
+    # Gaussian blur reaches 0 outside the crop, so cropping it directly leaves
+    # 0.5 on straight edges and about 0.25 at corners. Apply an inward smooth
+    # edge ramp so every outermost output pixel is exactly black.
+    return (feathered * full_crop_feather_mask(
+        mask.shape[0],
+        mask.shape[1],
+        mask.shape[2],
+        effective_blend,
+        mask.device,
+        mask.dtype,
+    )).float().clamp(0.0, 1.0)
+
+
+def full_crop_feather_mask(
+    batch_size: int,
+    height: int,
+    width: int,
+    blend_pixels: int,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    """Return a full-crop rectangle that fades inward from exact-zero edges."""
+
+    if blend_pixels <= 0:
+        return torch.ones((batch_size, height, width), device=device, dtype=dtype)
+
+    def axis_ramp(length: int) -> torch.Tensor:
+        if length <= 1:
+            return torch.zeros((length,), device=device, dtype=dtype)
+        positions = torch.arange(length, device=device, dtype=dtype)
+        distance = torch.minimum(positions, (length - 1) - positions)
+        effective = min(float(blend_pixels), float(distance.max().item()))
+        if effective <= 0:
+            return torch.zeros_like(distance)
+        normalized = (distance / effective).clamp(0.0, 1.0)
+        return normalized.square() * (3.0 - 2.0 * normalized)
+
+    ramp_y = axis_ramp(height).view(1, height, 1)
+    ramp_x = axis_ramp(width).view(1, 1, width)
+    return (ramp_y * ramp_x).expand(batch_size, -1, -1)
 
 
 def stack_stitcher_masks(stitcher: Mapping[str, object]) -> torch.Tensor:
