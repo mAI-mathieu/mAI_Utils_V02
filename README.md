@@ -117,7 +117,8 @@ The generated stitch mask has two modes:
 Only `cropped_mask` is sent to the inpainting model.
 `stitch_mask_blend_pixels` feathers the generated stitch boundary in either
 mode. Feathering happens inward so the outer crop boundary reaches exact black
-(`0.0`) while preserving a fully white center whenever the crop size allows it.
+(`0.0`) on only its final perimeter row while preserving a fully white center
+whenever the crop size allows it.
 
 Inputs:
 

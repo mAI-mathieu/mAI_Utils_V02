@@ -243,6 +243,20 @@ def test_full_crop_feather_reaches_exact_black_with_unlimited_setting():
     assert torch.any((mask > 0.0) & (mask < 1.0))
 
 
+def test_full_crop_feather_has_only_one_exact_black_perimeter():
+    height, width = 128, 160
+    mask = full_crop_feather_mask(
+        1, height, width, 64, torch.device("cpu"), torch.float32
+    )
+
+    expected_perimeter_pixels = 2 * height + 2 * width - 4
+    assert torch.count_nonzero(mask == 0.0) == expected_perimeter_pixels
+    assert torch.all(mask[:, 1, 1:-1] > 0.0)
+    assert torch.all(mask[:, -2, 1:-1] > 0.0)
+    assert torch.all(mask[:, 1:-1, 1] > 0.0)
+    assert torch.all(mask[:, 1:-1, -2] > 0.0)
+
+
 def test_missing_dependency_raises_a_nonfatal_classified_error(monkeypatch):
     monkeypatch.setattr(cropandstitch_dependency, "_already_loaded_module", lambda: None)
     monkeypatch.setattr(cropandstitch_dependency, "_dependency_candidates", lambda: [])

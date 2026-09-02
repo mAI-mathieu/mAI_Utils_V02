@@ -262,20 +262,33 @@ def full_crop_feather_mask(
     if blend_pixels <= 0:
         return torch.ones((batch_size, height, width), device=device, dtype=dtype)
 
-    def axis_ramp(length: int) -> torch.Tensor:
-        if length <= 1:
-            return torch.zeros((length,), device=device, dtype=dtype)
-        positions = torch.arange(length, device=device, dtype=dtype)
-        distance = torch.minimum(positions, (length - 1) - positions)
-        effective = min(float(blend_pixels), float(distance.max().item()))
-        if effective <= 0:
-            return torch.zeros_like(distance)
-        normalized = (distance / effective).clamp(0.0, 1.0)
-        return normalized.square() * (3.0 - 2.0 * normalized)
+    positions_y = torch.arange(height, device=device, dtype=dtype)
+    positions_x = torch.arange(width, device=device, dtype=dtype)
+    distance_y = torch.minimum(positions_y, (height - 1) - positions_y).view(
+        height, 1
+    )
+    distance_x = torch.minimum(positions_x, (width - 1) - positions_x).view(
+        1, width
+    )
+    distance_to_edge = torch.minimum(distance_y, distance_x)
+    maximum_distance = float(distance_to_edge.max().item())
+    effective = min(float(blend_pixels), maximum_distance)
+    if effective <= 0:
+        return torch.zeros((batch_size, height, width), device=device, dtype=dtype)
 
-    ramp_y = axis_ramp(height).view(1, height, 1)
-    ramp_x = axis_ramp(width).view(1, 1, width)
-    return (ramp_y * ramp_x).expand(batch_size, -1, -1)
+    normalized = (distance_to_edge / effective).clamp(0.0, 1.0)
+    ramp = torch.sin(normalized * (torch.pi / 2.0))
+
+    # Keep exactly the perimeter black. A tiny lower bound on every inner pixel
+    # prevents large feathers from quantizing additional rows to zero in an
+    # 8-bit ComfyUI preview.
+    minimum_visible = torch.tensor(1.0 / 255.0, device=device, dtype=dtype)
+    ramp = torch.where(
+        distance_to_edge == 0,
+        torch.zeros_like(ramp),
+        torch.maximum(ramp, minimum_visible),
+    )
+    return ramp.view(1, height, width).expand(batch_size, -1, -1)
 
 
 def stack_stitcher_masks(stitcher: Mapping[str, object]) -> torch.Tensor:
