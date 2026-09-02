@@ -123,7 +123,7 @@ Inputs:
 * All current inputs from the installed upstream `Inpaint Crop` node.
 * `stitch_mask_mode` (`rectangle (full crop)` or `extended mask`)
 * `stitch_mask_expand_pixels` (used by `extended mask`, default `32`)
-* `stitch_mask_blend_pixels` (default `32`)
+* `stitch_mask_blend_pixels` (default `32`; supports ComfyUI's full resolution range)
 
 Outputs:
 

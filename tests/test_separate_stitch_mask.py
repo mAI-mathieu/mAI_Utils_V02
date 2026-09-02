@@ -304,6 +304,7 @@ def test_whole_pack_imports_and_registers_node(cropandstitch_classes, monkeypatc
     assert "stitch_mask_mode" in input_types["required"]
     assert "stitch_mask_expand_pixels" in input_types["required"]
     assert "stitch_mask_blend_pixels" in input_types["required"]
+    assert input_types["required"]["stitch_mask_blend_pixels"][1]["max"] == 16384
     assert "stitch_mask" not in input_types["optional"]
 
 

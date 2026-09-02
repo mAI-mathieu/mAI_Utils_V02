@@ -65,7 +65,7 @@ class MAIInpaintCropSeparateStitchMask(_UPSTREAM.InpaintCropImproved):
             {
                 "default": 32,
                 "min": 0,
-                "max": 64,
+                "max": _UPSTREAM.nodes.MAX_RESOLUTION,
                 "step": 1,
                 "tooltip": "Feathering applied only to the separate stitch mask.",
             },
