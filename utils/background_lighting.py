@@ -16,6 +16,9 @@ def _normalize_image(image, name):
 
 
 def _normalize_mask(mask, height, width, device, dtype):
+    if mask is None:
+        return torch.zeros((1, height, width, 1), device=device, dtype=dtype)
+
     if not torch.is_tensor(mask):
         raise TypeError("edit_mask must be a torch tensor")
 
@@ -75,13 +78,13 @@ def _weighted_mean_and_std(image, weights, epsilon):
     return mean, variance.clamp_min(0.0).sqrt()
 
 
-def match_background_lighting(original_image, edited_image, edit_mask, epsilon=1e-6):
+def match_background_lighting(original_image, edited_image, edit_mask=None, epsilon=1e-6):
     """Match edited RGB channel mean/std using only inverse-mask pixels.
 
     ComfyUI masks use 1 for the edited region. The complement therefore weights
     the untouched background. The derived affine correction is applied to every
     pixel of the edited image and the result is constrained to ComfyUI's image
-    range.
+    range. When no mask is supplied, the whole image is used for analysis.
     """
     original = _normalize_image(original_image, "original_image")
     edited = _normalize_image(edited_image, "edited_image")

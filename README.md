@@ -22,7 +22,8 @@ Inputs:
 
 * `original_image` — the image before inpainting
 * `edited_image` — the complete image after inpainting or object removal
-* `edit_mask` — white marks the edited area; black marks the untouched background
+* optional `edit_mask` — white marks the edited area; black marks the untouched
+  background
 
 Output:
 
@@ -31,6 +32,7 @@ Output:
 Default behavior:
 
 * Uses only the inverse of `edit_mask` for analysis.
+* When `edit_mask` is not connected, uses the whole image for analysis.
 * Treats soft mask values as proportional background weights.
 * Matches the mean (brightness) and standard deviation (contrast) independently
   for the red, green, and blue channels.
@@ -40,7 +42,7 @@ Default behavior:
 
 Known limitations:
 
-* The original image, edited image, and mask must have matching dimensions.
+* When connected, the mask dimensions must match the image dimensions.
 * The mask must leave some untouched background visible.
 * Contrast cannot be reconstructed if an edited background channel is completely
   flat while the corresponding original channel has contrast; the node reports a

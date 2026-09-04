@@ -67,6 +67,17 @@ def test_soft_mask_weights_background_statistics_proportionally():
     assert torch.allclose(result, original, atol=1e-6)
 
 
+def test_missing_mask_uses_the_whole_image_for_analysis():
+    original = torch.tensor(
+        [[[[0.2, 0.3, 0.4], [0.6, 0.7, 0.8]]]], dtype=torch.float32
+    )
+    edited = original * 0.5 + 0.1
+
+    result = match_background_lighting(original, edited)
+
+    assert torch.allclose(result, original, atol=1e-6)
+
+
 def test_fully_white_mask_raises_clear_error():
     image = torch.full((1, 2, 2, 3), 0.5)
     edit_mask = torch.ones((1, 2, 2))
@@ -108,6 +119,20 @@ def test_node_contract_and_output_tuple():
     assert MAIBackgroundLightingMatch.CATEGORY == "mAI / Image"
     assert MAIBackgroundLightingMatch.RETURN_TYPES == ("IMAGE",)
     assert len(output) == 1
+    assert torch.allclose(output[0], original, atol=1e-6)
+
+
+def test_node_exposes_mask_as_optional_and_runs_without_it():
+    input_types = MAIBackgroundLightingMatch.INPUT_TYPES()
+    original = torch.tensor(
+        [[[[0.2, 0.2, 0.2], [0.6, 0.6, 0.6]]]], dtype=torch.float32
+    )
+    edited = original * 0.5 + 0.1
+
+    output = MAIBackgroundLightingMatch().match_lighting(original, edited)
+
+    assert "edit_mask" not in input_types["required"]
+    assert input_types["optional"]["edit_mask"] == ("MASK",)
     assert torch.allclose(output[0], original, atol=1e-6)
 
 

@@ -16,11 +16,13 @@ class MAIBackgroundLightingMatch:
             "required": {
                 "original_image": ("IMAGE",),
                 "edited_image": ("IMAGE",),
+            },
+            "optional": {
                 "edit_mask": ("MASK",),
-            }
+            },
         }
 
-    def match_lighting(self, original_image, edited_image, edit_mask):
+    def match_lighting(self, original_image, edited_image, edit_mask=None):
         corrected = match_background_lighting(
             original_image,
             edited_image,
