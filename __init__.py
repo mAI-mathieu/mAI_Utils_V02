@@ -1,6 +1,7 @@
 from .nodes.background_lighting_match import MAIBackgroundLightingMatch
 from .nodes.composite_layer_node import MAICompositeLayer
 from .nodes.example_text_node import MAIExampleTextNode
+from .nodes.krea2_image_conditioning import MAIKrea2ImageConditioning
 from .nodes.mask_bounding_box import MAIMaskBoundingBox
 from .nodes.mask_outline import MAIMaskOutline
 from .nodes.prepare_image_for_minimax_h3 import MAIPrepareImageForMinimaxH3
@@ -32,6 +33,7 @@ NODE_CLASS_MAPPINGS = {
     "MAIBackgroundLightingMatch": MAIBackgroundLightingMatch,
     "MAICompositeLayer": MAICompositeLayer,
     "MAIExampleTextNode": MAIExampleTextNode,
+    "MAIKrea2ImageConditioning": MAIKrea2ImageConditioning,
     "MAIMaskBoundingBox": MAIMaskBoundingBox,
     "MAIMaskOutline": MAIMaskOutline,
     "MAIPrepareImageForMinimaxH3": MAIPrepareImageForMinimaxH3,
@@ -46,6 +48,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MAIBackgroundLightingMatch": "mAI background lighting match",
     "MAICompositeLayer": "mAI Composite Layer",
     "MAIExampleTextNode": "mAI Example Text Node",
+    "MAIKrea2ImageConditioning": "mAI Krea2 image conditioning",
     "MAIMaskBoundingBox": "mAI mask bounding box",
     "MAIMaskOutline": "mAI mask outline",
     "MAIPrepareImageForMinimaxH3": "mAI prepare image for Minimax H3",

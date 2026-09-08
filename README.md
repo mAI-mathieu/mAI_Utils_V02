@@ -5,6 +5,64 @@ ComfyUI custom node pack for small, reusable mAI utility nodes.
 Install this folder under ComfyUI's `custom_nodes` directory, then restart ComfyUI.
 The currently registered nodes are listed below.
 
+## mAI Krea2 image conditioning
+
+Location: `mAI / Conditioning`. Registered as `MAIKrea2ImageConditioning`.
+
+Generates a reconstruction caption and Krea 2 conditioning using the connected
+native Krea 2 Qwen3-VL-4B encoder. It reuses the loaded CLIP and ComfyUI's image
+preprocessing, tokenizer, generation, and 12-layer conditioning extraction. No
+separate caption model, downloads, extra dependencies, or core modifications.
+
+Inputs:
+
+* `image`: non-empty floating-point ComfyUI IMAGE batch in `[0, 1]`, RGB or RGBA
+  (alpha is ignored).
+* `clip`: full Qwen3-VL-4B encoder loaded with CLIPLoader type `krea2`.
+  Other encoder types are rejected, including a generic Qwen3-VL CLIP.
+* `instruction`: editable reconstruction instructions; blank restores the default.
+* `conditioning_mode`: `text_plus_vl` by default; modes below.
+* `detail_level`: `low`, `medium`, `high` (default), or `extreme`; adjusts caption
+  instructions, without increasing the token budget automatically.
+* `caption_max_new_tokens`: 32–1024, default 192, per image.
+
+Modes:
+
+* `text_only`: generate a caption from the image, then encode only that caption
+  using the native Krea 2 text template.
+* `vl_only`: encode the actual image with an empty user text using the native
+  image template. The separately generated caption does not enter conditioning.
+* `text_plus_vl`: encode the generated caption and actual image together through
+  the native multimodal path. Both participate in the same transformer pass;
+  separate tensor concatenation or averaging is unnecessary. Independent text/VL
+  strength sliders are omitted because the native joint path does not expose them.
+
+Outputs, in order: `conditioning` (CONDITIONING), `caption` (STRING).
+The readable caption is always available for prompt inspection or saving.
+
+Batch behavior: captions are generated sequentially, one per image, and joined
+with `Image 1`, `Image 2`, etc. labels. All images become ordered references in
+one shared multimodal conditioning (text-only uses the joined captions). This
+does not pair separate conditionings with individual latent batch items. Process
+images individually when each latent needs its own reference. Larger batches and
+longer captions increase context length, generation time and memory use. Greedy
+caption decoding uses no random sampling; numerical results can vary by hardware.
+
+Usage/test in ComfyUI: restart, add this node, connect Load Image and the Krea 2
+CLIP. VAE Encode the source image separately and feed that latent into your Krea 2
+sampler/refine workflow. Connect `conditioning` to its positive input, preserving
+the workflow's model, negative conditioning, VAE and sampling settings. Inspect
+`caption` with a text display/save node; compare all three modes at the same seed
+and denoise. The node does not create latents or change denoise.
+
+Limitations: requires ComfyUI's native Krea 2 generation and multimodal APIs and
+encoder weights with vision support. Native conditioning format compatibility
+does not guarantee pixel-accurate reconstruction or prevent drift at high denoise.
+Caption length can be cut off by the token budget. Empty captions fail clearly.
+No fallback to an unrelated encoder is attempted if native execution fails.
+Adapter tests: `python -m pytest tests/test_krea2_conditioning.py`; these use small
+test doubles and do not measure model caption quality or GPU compatibility.
+
 ## mAI background lighting match
 
 Location:
