@@ -18,7 +18,8 @@ class MAIKrea2ImageConditioning:
     DESCRIPTION = (
         "Reuses the native Krea 2 Qwen3-VL-4B CLIP to caption reference images "
         "and build text, image-aware, or joint conditioning. Batches produce "
-        "one shared conditioning from all references."
+        "one shared conditioning from all references. In vl_only mode, caption "
+        "generation is skipped and the caption output is an empty string."
     )
 
     @classmethod

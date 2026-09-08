@@ -24,7 +24,7 @@ def clip(monkeypatch):
     comfy = ModuleType("comfy")
     management = ModuleType("comfy.model_management")
 
-    class InterruptProcessingException(Exception):
+    class InterruptProcessingException(BaseException):
         pass
 
     management.InterruptProcessingException = InterruptProcessingException
@@ -113,13 +113,17 @@ def test_modes_pass_real_images_and_caption_to_the_correct_native_path(clip, mod
     )
 
     assert conditioning is clip.conditioning  # Preserve native tensors and metadata.
-    assert caption == clip.caption_text
-    generation_tokens, generation_options = clip.generation_calls[0]
-    assert torch.equal(generation_tokens["image"], image)
-    assert generation_tokens["thinking"] is False
-    assert "llama_template" not in generation_tokens  # Keep native caption generation template.
-    assert generation_options == {"do_sample": False, "max_length": 64}
-    assert DEFAULT_INSTRUCTION in generation_tokens["text"]
+    if mode == "vl_only":
+        assert caption == ""
+        assert not clip.generation_calls
+    else:
+        assert caption == clip.caption_text
+        generation_tokens, generation_options = clip.generation_calls[0]
+        assert torch.equal(generation_tokens["image"], image)
+        assert generation_tokens["thinking"] is False
+        assert "llama_template" not in generation_tokens  # Keep native caption generation template.
+        assert generation_options == {"do_sample": False, "max_length": 64}
+        assert DEFAULT_INSTRUCTION in generation_tokens["text"]
     assert clip.encoded_tokens["text"] == ("" if mode == "vl_only" else caption)
     if mode == "text_only":
         assert "image" not in clip.encoded_tokens
@@ -130,6 +134,42 @@ def test_modes_pass_real_images_and_caption_to_the_correct_native_path(clip, mod
         assert template.startswith("<|im_start|>system\n")
         assert "<|im_start|>user\n<|vision_start|>" in template
     assert "thinking" not in clip.encoded_tokens  # Keep Krea 2 conditioning default.
+
+
+@pytest.mark.parametrize("batch_size", [1, 3])
+def test_vl_only_has_no_caption_dependency_and_encodes_all_references(clip, batch_size):
+    # Generation/decoding may be unavailable or broken without blocking VL mode.
+    clip.generate = None
+    clip.decode = None
+    clip.cond_stage_model.qwen3vl_4b.generate = None
+    image = torch.rand(batch_size, 8, 8, 3)
+    conditioning, caption = create_krea2_conditioning(
+        clip, image, conditioning_mode="vl_only", instruction=None,
+        detail_level=None, caption_max_new_tokens=None,
+    )
+    assert caption == ""
+    assert conditioning is clip.conditioning
+    assert not clip.generation_calls
+    assert len(clip.token_calls) == 1
+    assert clip.encoded_tokens["text"] == ""
+    assert torch.equal(clip.encoded_tokens["image"], image)
+    assert clip.encoded_tokens["llama_template"].count("<|image_pad|>") == batch_size
+    assert clip.cond_stage_model.reset_count == 1
+
+
+def test_vl_only_stop_propagates_and_restores_encoder_options(clip):
+    interrupted = clip.management.InterruptProcessingException()
+
+    def fail(tokens):
+        raise interrupted
+
+    clip.encode_from_tokens_scheduled = fail
+    with pytest.raises(clip.management.InterruptProcessingException) as caught:
+        create_krea2_conditioning(clip, torch.zeros(1, 8, 8, 3), conditioning_mode="vl_only")
+    assert caught.value is interrupted
+    assert not clip.generation_calls
+    assert clip.cond_stage_model.reset_count == 1
+    assert clip.cond_stage_model.qwen3vl_4b.transformer.model.graph_dynamic_vbar_blocks
 
 
 def test_batch_captions_are_sequential_and_all_references_reach_conditioning(clip):
@@ -232,6 +272,91 @@ def test_empty_caption_fails_without_encoding_fallback(clip, text):
     with pytest.raises(RuntimeError, match="empty reconstruction caption"):
         create_krea2_conditioning(clip, torch.zeros(1, 8, 8, 3))
     assert clip.encoded_tokens is None
+    assert len(clip.generation_calls) == 2
+
+
+@pytest.mark.parametrize("empty", ["", "  ", "<think>unfinished", "<think>done</think>"])
+def test_empty_response_retries_same_image_and_preserves_instruction(clip, empty, caplog):
+    responses = iter((empty, "A blue vase beside a window."))
+    clip.decode = lambda ids: next(responses)
+    image = torch.rand(1, 8, 8, 3)
+    conditioning, caption = create_krea2_conditioning(
+        clip, image, instruction="Focus on object placement.", caption_max_new_tokens=512,
+    )
+    first, retry = clip.generation_calls
+    assert retry[0]["text"].startswith(first[0]["text"])
+    assert "Focus on object placement." in retry[0]["text"]
+    assert retry[0]["text"] != first[0]["text"]
+    assert torch.equal(retry[0]["image"], image)
+    assert retry[0]["thinking"] is False
+    assert retry[1] == first[1] == {"do_sample": False, "max_length": 512}
+    assert caption == "A blue vase beside a window."
+    assert clip.encoded_tokens["text"] == caption
+    assert conditioning is clip.conditioning
+    assert clip.cond_stage_model.reset_count == 3
+    assert "retrying once" in caplog.text
+
+
+@pytest.mark.parametrize("count, hint", [(1, "ended before"), (32, "reached its token budget")])
+def test_failed_retry_reports_counts_and_distinguishes_early_stop_from_budget(clip, count, hint):
+    clip.generate = lambda *args, **kwargs: [151645] * count
+    clip.decode = lambda ids: ""
+    with pytest.raises(RuntimeError, match="after 2 attempts") as caught:
+        create_krea2_conditioning(clip, torch.zeros(1, 8, 8, 3), caption_max_new_tokens=32)
+    assert f"[{count}, {count}]" in str(caught.value)
+    assert hint in str(caught.value)
+    assert clip.encoded_tokens is None
+
+
+def test_batch_retries_only_failed_image_without_reusing_previous_caption(clip):
+    responses = iter(("A vase.", "", "A chair."))
+    clip.decode = lambda ids: next(responses)
+    image = torch.stack((torch.zeros(8, 8, 3), torch.ones(8, 8, 3)))
+    _, caption = create_krea2_conditioning(clip, image)
+    assert caption == "Image 1: A vase.\n\nImage 2: A chair."
+    assert len(clip.generation_calls) == 3
+    assert torch.equal(clip.generation_calls[2][0]["image"], image[1:2])
+
+
+def test_batch_failure_identifies_image_and_stops_before_conditioning(clip):
+    responses = iter(("A vase.", "", ""))
+    clip.decode = lambda ids: next(responses)
+    with pytest.raises(RuntimeError, match="image 2 after 2 attempts"):
+        create_krea2_conditioning(clip, torch.zeros(3, 8, 8, 3))
+    assert len(clip.generation_calls) == 3
+    assert clip.encoded_tokens is None
+
+
+@pytest.mark.parametrize("failure", ["decode", "runtime", "interrupt"])
+def test_retry_does_not_swallow_native_errors_or_interruptions(clip, failure):
+    original = clip.generate
+
+    def retry_fails(*args, **kwargs):
+        result = original(*args, **kwargs)
+        if len(clip.generation_calls) == 2:
+            if failure == "interrupt":
+                raise clip.management.InterruptProcessingException()
+            if failure == "runtime":
+                raise RuntimeError("native generation failed")
+        return result
+
+    clip.generate = retry_fails
+    responses = iter(("", None))
+    clip.decode = lambda ids: next(responses)
+    expected = clip.management.InterruptProcessingException if failure == "interrupt" else RuntimeError
+    with pytest.raises(expected):
+        create_krea2_conditioning(clip, torch.zeros(1, 8, 8, 3))
+    assert len(clip.generation_calls) == 2
+    assert clip.encoded_tokens is None
+    assert clip.cond_stage_model.reset_count == 2
+    assert clip.cond_stage_model.qwen3vl_4b.transformer.model.graph_dynamic_vbar_blocks
+
+
+def test_invalid_decode_result_does_not_trigger_retry(clip):
+    clip.decode = lambda ids: None
+    with pytest.raises(RuntimeError, match="decoding did not return text"):
+        create_krea2_conditioning(clip, torch.zeros(1, 8, 8, 3))
+    assert len(clip.generation_calls) == 1
 
 
 def test_wrong_encoder_and_tokenizer_fail_clearly(clip):

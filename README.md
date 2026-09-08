@@ -31,8 +31,9 @@ Modes:
 * `text_only`: generate a caption from the image, then encode only that caption
   using the native Krea 2 text template.
 * `vl_only`: encode the actual image with an empty user text using Krea's native
-  system/user template with image placeholders inside the user turn. The
-  separately generated caption does not enter conditioning.
+  system/user template with image placeholders inside the user turn. Caption
+  generation is skipped entirely and `caption` returns an empty string (`""`).
+  `instruction`, `detail_level`, and `caption_max_new_tokens` are unused in this mode.
 * `text_plus_vl`: encode the generated caption and actual image together through
   the native multimodal path. Both participate in the same transformer pass;
   separate tensor concatenation or averaging is unnecessary. Independent text/VL
@@ -46,9 +47,10 @@ After updating from the original implementation, restart ComfyUI and re-run the
 node to regenerate conditioning. Compare at the same seed and sampler settings.
 
 Outputs, in order: `conditioning` (CONDITIONING), `caption` (STRING).
-The readable caption is always available for prompt inspection or saving.
+The readable caption is available in `text_only` and `text_plus_vl` for prompt
+inspection or saving. The output socket remains present but empty in `vl_only`.
 
-Batch behavior: captions are generated sequentially, one per image, and joined
+Batch behavior: in the text modes, captions are generated sequentially, one per image, and joined
 with `Image 1`, `Image 2`, etc. labels. All images become ordered references in
 one shared multimodal conditioning (text-only uses the joined captions). This
 does not pair separate conditionings with individual latent batch items. Process
@@ -62,11 +64,20 @@ sampler/refine workflow. Connect `conditioning` to its positive input, preservin
 the workflow's model, negative conditioning, VAE and sampling settings. Inspect
 `caption` with a text display/save node; compare all three modes at the same seed
 and denoise. The node does not create latents or change denoise.
+For `vl_only`, verify that no caption token-generation progress appears, the
+caption output is empty, and image conditioning still reaches the sampler.
 
 Limitations: requires ComfyUI's native Krea 2 generation and multimodal APIs and
 encoder weights with vision support. Native conditioning format compatibility
 does not guarantee pixel-accurate reconstruction or prevent drift at high denoise.
-Caption length can be cut off by the token budget. Empty captions fail clearly.
+Caption length can be cut off by the token budget. An empty or reasoning-only
+response triggers one automatic retry with an explicit caption request, using
+the same image, encoder and token budget. A warning is logged only when retrying.
+If both attempts are empty, the node stops with the image number and returned
+token counts; it never substitutes a generic or previous image's caption.
+Increasing the budget may help exhausted generations, but not immediate stops.
+Native execution errors and cancellation are not retried. To check recovery,
+rerun the image that failed and inspect the caption and any retry warning.
 Image-aware conditioning is experimental: the
 [Krea reference encoder](https://github.com/krea-ai/krea-2/blob/main/encoder.py)
 defines a text-only, 512-position layout. Full-resolution image embeddings can

@@ -1,5 +1,6 @@
 """Small adapter around ComfyUI's native Krea 2 tokenizer and CLIP APIs."""
 
+import logging
 import re
 
 import torch
@@ -37,16 +38,17 @@ def build_reconstruction_instruction(instruction, detail_level):
     ))
 
 
+class EmptyCaptionError(RuntimeError):
+    """Generation completed without a usable visual caption."""
+
+
 def clean_caption(text):
     if not isinstance(text, str):
         raise RuntimeError("Krea 2 caption decoding did not return text.")
     # Also discard unfinished reasoning when the generation budget was exhausted.
     text = re.sub(r"<think>.*?(?:</think>|$)", "", text, flags=re.DOTALL).strip()
     if not text:
-        raise RuntimeError(
-            "Krea 2 generated an empty reconstruction caption. Try increasing "
-            "caption_max_new_tokens or changing the instruction."
-        )
+        raise EmptyCaptionError("Krea 2 generated an empty reconstruction caption.")
     return text
 
 
@@ -65,7 +67,7 @@ def build_image_conditioning_template(krea_template, image_count):
     return krea_template.replace("{}", vision_block * image_count + "{}", 1)
 
 
-def validate_krea2_clip(clip):
+def validate_krea2_clip(clip, require_caption=True):
     # Lazy import keeps the pack usable on installations without Krea 2 support.
     try:
         from comfy.text_encoders.krea2 import (
@@ -90,13 +92,16 @@ def validate_krea2_clip(clip):
             "Load the full Qwen3-VL-4B encoder with CLIPLoader type 'krea2'; "
             "a generic Qwen-VL or other CLIP does not provide Krea 2 conditioning."
         )
-    for name in ("tokenize", "generate", "decode", "encode_from_tokens_scheduled"):
+    required_apis = ("tokenize", "encode_from_tokens_scheduled")
+    if require_caption:
+        required_apis += ("generate", "decode")
+    for name in required_apis:
         if not callable(getattr(clip, name, None)):
             raise RuntimeError(
                 f"The connected Krea 2 CLIP lacks the native {name} API. "
                 "Update ComfyUI; this node cannot substitute another encoder."
             )
-    if not callable(getattr(model.qwen3vl_4b, "generate", None)):
+    if require_caption and not callable(getattr(model.qwen3vl_4b, "generate", None)):
         raise RuntimeError("This Krea 2 encoder does not support native caption generation.")
 
 
@@ -139,6 +144,46 @@ def _native_clip_call(clip, operation, *args, **kwargs):
         clip.cond_stage_model.reset_clip_options()
 
 
+def _generate_caption(clip, image, prompt, max_tokens, image_number):
+    """Retry an empty response once; never replace it with an invented caption."""
+    retry_prompt = (
+        prompt + "\n\nWrite a non-empty caption of the supplied image now. "
+        "Begin directly with the main visible subject, then describe its surroundings."
+    )
+    token_counts = []
+    for attempt, attempt_prompt in enumerate((prompt, retry_prompt)):
+        tokens = clip.tokenize(attempt_prompt, image=image, thinking=False)
+        generated = _native_clip_call(
+            clip, clip.generate, tokens, do_sample=False, max_length=max_tokens,
+        )
+        decoded = clip.decode(generated)
+        token_counts.append(len(generated))
+        try:
+            return clean_caption(decoded)
+        except EmptyCaptionError as exc:
+            if attempt == 0:
+                logging.warning(
+                    "mAI Krea2: image %d returned no usable caption (%d tokens, "
+                    "budget %d); retrying once with an explicit caption request.",
+                    image_number, token_counts[-1], max_tokens,
+                )
+                continue
+            hint = (
+                "The retry reached its token budget; increase caption_max_new_tokens "
+                "or request a shorter caption."
+                if token_counts[-1] >= max_tokens else
+                "Generation ended before its token limit; increasing "
+                "caption_max_new_tokens alone is unlikely to help. Test this image "
+                "with the native Generate Text node and the same Krea 2 encoder."
+            )
+            raise EmptyCaptionError(
+                f"Krea 2 generated an empty reconstruction caption for image "
+                f"{image_number} after 2 attempts. Returned token counts "
+                f"(including special tokens): {token_counts}; budget per attempt: "
+                f"{max_tokens}. {hint}"
+            ) from exc
+
+
 @torch.inference_mode()
 def create_krea2_conditioning(
     clip, image, instruction=DEFAULT_INSTRUCTION, conditioning_mode="text_plus_vl",
@@ -146,27 +191,29 @@ def create_krea2_conditioning(
 ):
     if conditioning_mode not in CONDITIONING_MODES:
         raise ValueError(f"Unknown conditioning mode: {conditioning_mode}")
-    if (
-        not isinstance(caption_max_new_tokens, int)
-        or isinstance(caption_max_new_tokens, bool)
-        or not 32 <= caption_max_new_tokens <= 1024
-    ):
-        raise ValueError("caption_max_new_tokens must be an integer between 32 and 1024.")
-    prompt = build_reconstruction_instruction(instruction, detail_level)
+    require_caption = conditioning_mode != "vl_only"
+    if require_caption:
+        if (
+            not isinstance(caption_max_new_tokens, int)
+            or isinstance(caption_max_new_tokens, bool)
+            or not 32 <= caption_max_new_tokens <= 1024
+        ):
+            raise ValueError("caption_max_new_tokens must be an integer between 32 and 1024.")
+        prompt = build_reconstruction_instruction(instruction, detail_level)
     image = validate_image(image)
-    validate_krea2_clip(clip)
+    validate_krea2_clip(clip, require_caption=require_caption)
 
-    captions = []
-    for index in range(image.shape[0]):
-        # Match native Generate Text: image template, no reasoning, native KV cache.
-        tokens = clip.tokenize(prompt, image=image[index:index + 1], thinking=False)
-        generated = _native_clip_call(
-            clip, clip.generate, tokens, do_sample=False, max_length=caption_max_new_tokens,
+    caption = ""
+    if require_caption:
+        captions = []
+        for index in range(image.shape[0]):
+            # Match native Generate Text: image template, no reasoning, native KV cache.
+            captions.append(_generate_caption(
+                clip, image[index:index + 1], prompt, caption_max_new_tokens, index + 1,
+            ))
+        caption = captions[0] if len(captions) == 1 else "\n\n".join(
+            f"Image {index + 1}: {text}" for index, text in enumerate(captions)
         )
-        captions.append(clean_caption(clip.decode(generated)))
-    caption = captions[0] if len(captions) == 1 else "\n\n".join(
-        f"Image {index + 1}: {text}" for index, text in enumerate(captions)
-    )
 
     text = "" if conditioning_mode == "vl_only" else caption
     if conditioning_mode == "text_only":
