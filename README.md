@@ -30,12 +30,20 @@ Modes:
 
 * `text_only`: generate a caption from the image, then encode only that caption
   using the native Krea 2 text template.
-* `vl_only`: encode the actual image with an empty user text using the native
-  image template. The separately generated caption does not enter conditioning.
+* `vl_only`: encode the actual image with an empty user text using Krea's native
+  system/user template with image placeholders inside the user turn. The
+  separately generated caption does not enter conditioning.
 * `text_plus_vl`: encode the generated caption and actual image together through
   the native multimodal path. Both participate in the same transformer pass;
   separate tensor concatenation or averaging is unnecessary. Independent text/VL
   strength sliders are omitted because the native joint path does not expose them.
+
+Both image-conditioning modes preserve Krea's system/user prefix. The generic
+Qwen image-generation chat template is used only for caption generation: its
+user/assistant layout is incompatible with Krea's conditioning prefix stripping,
+especially after image placeholders expand into many hidden-state positions.
+After updating from the original implementation, restart ComfyUI and re-run the
+node to regenerate conditioning. Compare at the same seed and sampler settings.
 
 Outputs, in order: `conditioning` (CONDITIONING), `caption` (STRING).
 The readable caption is always available for prompt inspection or saving.
@@ -59,7 +67,31 @@ Limitations: requires ComfyUI's native Krea 2 generation and multimodal APIs and
 encoder weights with vision support. Native conditioning format compatibility
 does not guarantee pixel-accurate reconstruction or prevent drift at high denoise.
 Caption length can be cut off by the token budget. Empty captions fail clearly.
+Image-aware conditioning is experimental: the
+[Krea reference encoder](https://github.com/krea-ai/krea-2/blob/main/encoder.py)
+defines a text-only, 512-position layout. Full-resolution image embeddings can
+produce much longer sequences; matching the tensor format does not establish
+equal generation quality. This node does not silently truncate image embeddings
+or caption text to fit that layout. If textures spread between objects, compare
+`text_only` and `text_plus_vl` with the same seed, caption and sampling settings.
 No fallback to an unrelated encoder is attempted if native execution fails.
+Stop uses ComfyUI's native interruption mechanism. The adapter restores encoder
+options on exit and temporarily disables the native decoder's
+`graph_dynamic_vbar_blocks` optimization when exposed. This avoids new decoder
+graph captures in this node, with a possible caption speed cost. It preserves
+native interruption exceptions and discards cancelled results without forcing
+GPU frees or garbage collection. Existing graphs from other nodes and external
+compile/graph wrappers are outside this guard. Stop may wait for an active GPU
+operation to finish. To check cancellation, restart ComfyUI, stop during caption
+generation, then queue again with the same encoder; repeat during conditioning.
+
+If Stop aborts the whole server with `CUDAMallocAsyncAllocator`, "uncaptured free
+of a captured allocation", and `CUDA error: invalid argument`, Python cannot catch
+that native allocator abort. As a diagnostic workaround, restart ComfyUI with
+`--disable-cuda-graphs --disable-cuda-malloc` added to the existing launch command.
+These flags affect the whole server and may change speed/memory use; this node
+does not change launch settings automatically. The local cancellation tests do
+not reproduce or prove resolution of a remote CUDA/driver crash.
 Adapter tests: `python -m pytest tests/test_krea2_conditioning.py`; these use small
 test doubles and do not measure model caption quality or GPU compatibility.
 

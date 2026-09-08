@@ -9,6 +9,7 @@ import torch
 from nodes.krea2_image_conditioning import MAIKrea2ImageConditioning
 from utils.krea2_conditioning import (
     DEFAULT_INSTRUCTION,
+    build_image_conditioning_template,
     build_reconstruction_instruction,
     clean_caption,
     create_krea2_conditioning,
@@ -20,11 +21,40 @@ from utils.krea2_conditioning import (
 def clip(monkeypatch):
     """Exercise adapter calls without importing ComfyUI or allocating model weights."""
     native = ModuleType("comfy.text_encoders.krea2")
+    comfy = ModuleType("comfy")
+    management = ModuleType("comfy.model_management")
 
-    class Krea2TEModel:
+    class InterruptProcessingException(Exception):
         pass
 
+    management.InterruptProcessingException = InterruptProcessingException
+    management.interrupted = False
+
+    def check_interrupt():
+        if management.interrupted:
+            management.interrupted = False
+            raise InterruptProcessingException()
+
+    management.throw_exception_if_processing_interrupted = check_interrupt
+    comfy.model_management = management
+    monkeypatch.setitem(sys.modules, "comfy", comfy)
+    monkeypatch.setitem(sys.modules, "comfy.model_management", management)
+
+    class Krea2TEModel:
+        def __init__(self):
+            self.reset_count = 0
+            self.execution_device = None
+
+        def reset_clip_options(self):
+            self.reset_count += 1
+            self.execution_device = None
+
     class Krea2Qwen3VLClipModel:
+        def __init__(self):
+            self.transformer = SimpleNamespace(
+                model=SimpleNamespace(graph_dynamic_vbar_blocks=True),
+            )
+
         def generate(self):
             pass
 
@@ -34,6 +64,10 @@ def clip(monkeypatch):
     native.Krea2TEModel = Krea2TEModel
     native.Krea2Qwen3VLClipModel = Krea2Qwen3VLClipModel
     native.Krea2Tokenizer = Krea2Tokenizer
+    native.KREA2_TEMPLATE = (
+        "<|im_start|>system\nNative Krea description instruction.<|im_end|>\n"
+        "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n"
+    )
     monkeypatch.setitem(sys.modules, native.__name__, native)
 
     class NativeClip:
@@ -46,6 +80,7 @@ def clip(monkeypatch):
             self.encoded_tokens = None
             self.conditioning = [[torch.ones(1, 2, 12 * 2560), {"metadata": object()}]]
             self.caption_text = "A red cup at the left of a wooden table."
+            self.management = management
 
         def tokenize(self, text, **kwargs):
             tokens = {"text": text, **kwargs}
@@ -54,6 +89,7 @@ def clip(monkeypatch):
 
         def generate(self, tokens, **kwargs):
             assert not torch.is_grad_enabled()
+            assert not self.cond_stage_model.qwen3vl_4b.transformer.model.graph_dynamic_vbar_blocks
             self.generation_calls.append((tokens, kwargs))
             return [17, 18]
 
@@ -62,6 +98,7 @@ def clip(monkeypatch):
             return self.caption_text
 
         def encode_from_tokens_scheduled(self, tokens):
+            assert not self.cond_stage_model.qwen3vl_4b.transformer.model.graph_dynamic_vbar_blocks
             self.encoded_tokens = tokens
             return self.conditioning
 
@@ -80,13 +117,18 @@ def test_modes_pass_real_images_and_caption_to_the_correct_native_path(clip, mod
     generation_tokens, generation_options = clip.generation_calls[0]
     assert torch.equal(generation_tokens["image"], image)
     assert generation_tokens["thinking"] is False
+    assert "llama_template" not in generation_tokens  # Keep native caption generation template.
     assert generation_options == {"do_sample": False, "max_length": 64}
     assert DEFAULT_INSTRUCTION in generation_tokens["text"]
     assert clip.encoded_tokens["text"] == ("" if mode == "vl_only" else caption)
     if mode == "text_only":
         assert "image" not in clip.encoded_tokens
+        assert "llama_template" not in clip.encoded_tokens
     else:
         assert torch.equal(clip.encoded_tokens["image"], image)
+        template = clip.encoded_tokens["llama_template"]
+        assert template.startswith("<|im_start|>system\n")
+        assert "<|im_start|>user\n<|vision_start|>" in template
     assert "thinking" not in clip.encoded_tokens  # Keep Krea 2 conditioning default.
 
 
@@ -100,6 +142,43 @@ def test_batch_captions_are_sequential_and_all_references_reach_conditioning(cli
     assert clip.encoded_tokens["text"] == caption
     assert torch.equal(clip.encoded_tokens["image"], image)
     assert conditioning is clip.conditioning
+    assert clip.encoded_tokens["llama_template"].count("<|image_pad|>") == 2
+
+
+@pytest.mark.parametrize("image_count", [1, 2, 4])
+def test_conditioning_prefix_ends_before_every_image_placeholder(clip, image_count):
+    native_template = sys.modules["comfy.text_encoders.krea2"].KREA2_TEMPLATE
+    template = build_image_conditioning_template(native_template, image_count)
+    prefix, suffix = native_template.split("{}")
+    assert template.startswith(prefix)
+    assert template.endswith("{}" + suffix)
+    assert template.count("<|image_pad|>") == image_count
+    # Native Krea stripping locates the second im_start. Its index must not
+    # depend on image token expansion or caption length (the old template did).
+    turns = template.split("<|im_start|>")
+    assert turns[1].startswith("system\n")
+    assert turns[2].startswith("user\n<|vision_start|>")
+    assert turns[3].startswith("assistant\n")
+    assert prefix.count("<|im_start|>") == 2
+    assert "<|image_pad|>" not in prefix
+    # Formatting must leave caption braces intact.
+    assert "A sign saying {OPEN}" in template.format("A sign saying {OPEN}")
+
+
+@pytest.mark.parametrize("template", [
+    None, "{}", "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+    "<|im_start|>system\n{}<|im_start|>user\n{}",
+])
+def test_rejects_templates_that_break_native_prefix_stripping(template):
+    with pytest.raises(ValueError, match="native system/user template"):
+        build_image_conditioning_template(template, 1)
+
+
+@pytest.mark.parametrize("count", [0, -1, 1.5, True])
+def test_rejects_invalid_reference_counts(clip, count):
+    native_template = sys.modules["comfy.text_encoders.krea2"].KREA2_TEMPLATE
+    with pytest.raises(ValueError, match="positive integer"):
+        build_image_conditioning_template(native_template, count)
 
 
 def test_rgba_alpha_is_ignored_without_changing_rgb(clip):
@@ -176,6 +255,76 @@ def test_native_errors_propagate_without_fallback(clip):
     with pytest.raises(RuntimeError, match="vision weights unavailable"):
         create_krea2_conditioning(clip, torch.zeros(1, 8, 8, 3))
     assert clip.encoded_tokens is None
+    assert clip.cond_stage_model.reset_count == 1
+
+
+@pytest.mark.parametrize("stage", ["generate", "encode_from_tokens_scheduled"])
+def test_stop_restores_options_and_allows_rerun(clip, stage):
+    original = getattr(clip, stage)
+    interrupted = clip.management.InterruptProcessingException()
+    decoder = clip.cond_stage_model.qwen3vl_4b.transformer.model
+
+    def interrupted_operation(*args, **kwargs):
+        clip.cond_stage_model.execution_device = "test execution device"
+        assert decoder.graph_dynamic_vbar_blocks is False
+        raise interrupted
+
+    setattr(clip, stage, interrupted_operation)
+    with pytest.raises(clip.management.InterruptProcessingException) as caught:
+        create_krea2_conditioning(clip, torch.zeros(2, 8, 8, 3))
+    assert caught.value is interrupted
+    assert decoder.graph_dynamic_vbar_blocks is True
+    assert clip.cond_stage_model.execution_device is None
+    assert clip.encoded_tokens is None
+
+    setattr(clip, stage, original)
+    result, caption = create_krea2_conditioning(clip, torch.zeros(1, 8, 8, 3))
+    assert result is clip.conditioning
+    assert caption == clip.caption_text
+    assert decoder.graph_dynamic_vbar_blocks is True
+
+
+@pytest.mark.parametrize("has_graph_flag", [True, False])
+def test_decoders_without_enabled_graph_capture_keep_their_configuration(clip, has_graph_flag):
+    decoder = clip.cond_stage_model.qwen3vl_4b.transformer.model
+    if has_graph_flag:
+        decoder.graph_dynamic_vbar_blocks = False
+    else:
+        del decoder.graph_dynamic_vbar_blocks
+    # These versions have no active graph path to assert inside the doubles.
+    clip.generate = lambda *args, **kwargs: [17, 18]
+    clip.encode_from_tokens_scheduled = lambda *args: clip.conditioning
+    create_krea2_conditioning(clip, torch.zeros(1, 8, 8, 3))
+    assert hasattr(decoder, "graph_dynamic_vbar_blocks") == has_graph_flag
+    if has_graph_flag:
+        assert decoder.graph_dynamic_vbar_blocks is False
+
+
+def test_stop_before_generation_does_no_model_work(clip):
+    clip.management.interrupted = True
+    with pytest.raises(clip.management.InterruptProcessingException):
+        create_krea2_conditioning(clip, torch.zeros(1, 8, 8, 3))
+    assert not clip.generation_calls
+    assert clip.encoded_tokens is None
+    assert clip.cond_stage_model.execution_device is None
+
+
+@pytest.mark.parametrize("stage", ["generate", "encode_from_tokens_scheduled"])
+def test_stop_at_end_of_native_call_discards_outputs(clip, stage):
+    original = getattr(clip, stage)
+
+    def request_stop(*args, **kwargs):
+        result = original(*args, **kwargs)
+        clip.management.interrupted = True
+        return result
+
+    setattr(clip, stage, request_stop)
+    with pytest.raises(clip.management.InterruptProcessingException):
+        create_krea2_conditioning(clip, torch.zeros(2, 8, 8, 3))
+    if stage == "generate":
+        assert len(clip.generation_calls) == 1
+        assert clip.encoded_tokens is None
+    assert clip.cond_stage_model.execution_device is None
 
 
 def test_pack_registration_and_socket_contract(monkeypatch):

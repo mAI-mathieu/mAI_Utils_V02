@@ -50,6 +50,21 @@ def clean_caption(text):
     return text
 
 
+def build_image_conditioning_template(krea_template, image_count):
+    """Put image placeholders after Krea's system+user prefix, never before it."""
+    if (
+        not isinstance(krea_template, str)
+        or krea_template.count("{}") != 1
+        or not krea_template.startswith("<|im_start|>system\n")
+        or "<|im_start|>user\n{}" not in krea_template
+    ):
+        raise ValueError("Krea 2 conditioning requires its native system/user template.")
+    if not isinstance(image_count, int) or isinstance(image_count, bool) or image_count < 1:
+        raise ValueError("image_count must be a positive integer.")
+    vision_block = "<|vision_start|><|image_pad|><|vision_end|>"
+    return krea_template.replace("{}", vision_block * image_count + "{}", 1)
+
+
 def validate_krea2_clip(clip):
     # Lazy import keeps the pack usable on installations without Krea 2 support.
     try:
@@ -98,6 +113,32 @@ def validate_image(image):
     return image[..., :3]
 
 
+def _native_clip_call(clip, operation, *args, **kwargs):
+    """Avoid decoder graph capture and restore options on every exit path."""
+    from comfy import model_management
+
+    transformer = clip.cond_stage_model.qwen3vl_4b.transformer
+    decoder = transformer.model
+    graph_enabled = getattr(decoder, "graph_dynamic_vbar_blocks", False)
+    try:
+        model_management.throw_exception_if_processing_interrupted()
+        # Some native Llama-family decoders capture fixed-KV decode operations.
+        # Interrupted capture/replay can leave graph-owned allocations for the
+        # executor's later GC. Use native eager decoding for this node only.
+        if graph_enabled:
+            decoder.graph_dynamic_vbar_blocks = False
+        result = operation(*args, **kwargs)
+        model_management.throw_exception_if_processing_interrupted()
+        return result
+    finally:
+        if graph_enabled:
+            decoder.graph_dynamic_vbar_blocks = graph_enabled
+        # CLIP.generate changes execution options without a native finally block.
+        # Preserve native exceptions. Do not clear tracebacks, collect garbage,
+        # force-unload models or empty CUDA caches on the cancellation path.
+        clip.cond_stage_model.reset_clip_options()
+
+
 @torch.inference_mode()
 def create_krea2_conditioning(
     clip, image, instruction=DEFAULT_INSTRUCTION, conditioning_mode="text_plus_vl",
@@ -119,7 +160,9 @@ def create_krea2_conditioning(
     for index in range(image.shape[0]):
         # Match native Generate Text: image template, no reasoning, native KV cache.
         tokens = clip.tokenize(prompt, image=image[index:index + 1], thinking=False)
-        generated = clip.generate(tokens, do_sample=False, max_length=caption_max_new_tokens)
+        generated = _native_clip_call(
+            clip, clip.generate, tokens, do_sample=False, max_length=caption_max_new_tokens,
+        )
         captions.append(clean_caption(clip.decode(generated)))
     caption = captions[0] if len(captions) == 1 else "\n\n".join(
         f"Image {index + 1}: {text}" for index, text in enumerate(captions)
@@ -129,10 +172,16 @@ def create_krea2_conditioning(
     if conditioning_mode == "text_only":
         tokens = clip.tokenize(text)
     else:
-        # The native tokenizer inserts real image embeddings and handles multiple
-        # references. Joint text+image encoding preserves cross-modal interaction.
-        tokens = clip.tokenize(text, image=image)
-    # This API resets generation's layer=None and applies Krea 2's 12-layer taps,
+        from comfy.text_encoders.krea2 import KREA2_TEMPLATE
+
+        # Passing image alone selects Qwen's user/assistant generation template.
+        # Krea's prefix stripper assumes the SECOND im_start is the user turn;
+        # with the generic template it instead cuts at the assistant token index,
+        # which is also wrong after an image placeholder expands into many tokens.
+        # Keep Krea's system/user prefix so stripping ends BEFORE image expansion.
+        template = build_image_conditioning_template(KREA2_TEMPLATE, image.shape[0])
+        tokens = clip.tokenize(text, image=image, llama_template=template)
+    # This API applies Krea 2's 12-layer taps,
     # prefix stripping, flattening and standard conditioning metadata unchanged.
-    conditioning = clip.encode_from_tokens_scheduled(tokens)
+    conditioning = _native_clip_call(clip, clip.encode_from_tokens_scheduled, tokens)
     return conditioning, caption
