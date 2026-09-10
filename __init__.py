@@ -70,6 +70,4 @@ if MAIInpaintCropSeparateStitchMask is not None:
 # MAIImageLayerStack remains in nodes/image_layer_stack_node.py, but is not
 # registered by default because the compact chainable node replaces its tall UI.
 
-WEB_DIRECTORY = "./web"
-
-__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
+__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]

@@ -510,22 +510,27 @@ mAI / Utils
 ```
 
 Purpose:
-Automatically detect a connected scalar input and convert it to one selected output type.
+Convert one selected input type into boolean, string, int, and float outputs.
 
 Inputs:
 
-* `value`: one required connection accepting string, int, float, or boolean values.
-* `output_type`: dropdown with `string` (default), `int`, `float`, and `boolean`.
-* `strict`: whether invalid conversions raise an error (default: false).
+* `source_type`
+* `boolean`
+* `string`
+* `int`
+* `float`
+* `strict`
 
 Outputs:
 
-* One output socket, whose label and type follow `output_type`.
+* `boolean`
+* `string`
+* `int`
+* `float`
 
 Default behavior:
 
-* The actual incoming value determines the source type; no source selection is needed.
-* Only the selected output conversion runs. Boolean-to-string returns `true` or `false`.
+* `source_type` decides which input value is used for conversion.
 * `strict = false` falls back to safe defaults for invalid conversions.
 * `strict = true` raises errors for invalid conversions.
 
@@ -534,20 +539,6 @@ Safe defaults:
 * Invalid boolean conversions return `false`.
 * Invalid int conversions return `0`.
 * Invalid float conversions return `0.0`.
-
-Known limitations:
-
-* Supports scalar values only; images, masks, latent objects, and other complex values raise a clear error.
-* Changing the output type disconnects outgoing links; reconnect to a compatible input.
-* This replaces the previous four-input/four-output layout. Replace old converter nodes and reconnect their links in saved workflows.
-* The frontend extension sets the visible output type. Backend conversion still works without it, but the socket remains a wildcard.
-
-Testing:
-
-* Restart ComfyUI and refresh the browser. Add `mAI Type Converter` from `mAI / Utils`.
-* Connect a string containing `12.7`, select `int`, and connect the single output to an integer input: the result is `12`.
-* Try boolean, integer, and float sources without selecting an input type. Save and reload to check the selected output type persists.
-* Run `python -m pytest tests/test_type_converter_node.py tests/test_type_conversion.py` for conversion checks.
 
 ## mAI Random Line
 
