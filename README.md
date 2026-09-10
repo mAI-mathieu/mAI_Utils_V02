@@ -5,6 +5,23 @@ ComfyUI custom node pack for small, reusable mAI utility nodes.
 Install this folder under ComfyUI's `custom_nodes` directory, then restart ComfyUI.
 The currently registered nodes are listed below.
 
+## mAI image aspect ratio
+
+Location: `mAI / Image`. Registered as `MAIImageAspectRatio`.
+
+Input: `image` (`IMAGE`). Output: `aspect_ratio` (`STRING`), exactly `1:1`,
+`16:9`, or `9/16` (portrait).
+
+Selects the preset with the smallest absolute difference from the image's
+width divided by height. Exact ties prefer `1:1`. Reads dimensions only and
+returns one string for the entire batch, whose images share dimensions.
+Only these three presets are supported; empty images are rejected.
+
+Test in ComfyUI: restart, add **mAI image aspect ratio**, connect Load Image,
+and connect the output to a text display node. Images sized 1024×1024,
+1920×1080, and 1080×1920 should return `1:1`, `16:9`, and `9/16` respectively.
+Automated tests: `python -m pytest tests/test_aspect_ratios.py tests/test_image_aspect_ratio.py`.
+
 ## mAI Krea2 image conditioning
 
 Location: `mAI / Conditioning`. Registered as `MAIKrea2ImageConditioning`.
