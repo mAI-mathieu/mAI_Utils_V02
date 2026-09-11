@@ -5,6 +5,79 @@ ComfyUI custom node pack for small, reusable mAI utility nodes.
 Install this folder under ComfyUI's `custom_nodes` directory, then restart ComfyUI.
 The currently registered nodes are listed below.
 
+## mAI Cinematic Post
+
+Location: `mAI / Image`. Registered as `mAI_CinematicPost` (the explicitly
+requested identifier). Input: `image` (`IMAGE`, float RGB `[B,H,W,3]` in 0–1).
+Output: `image` (`IMAGE`), preserving batch size, resolution, device and dtype.
+Optional `subject_mask` (`MASK`): white protects subject color from grading and
+gently boosts sharpening/local contrast, scaled by `skin_protect`. Single masks
+broadcast across the batch; differently sized masks are bilinearly resized.
+Missing or zero-element masks use gentle orange-hue protection; an all-black mask
+explicitly disables subject protection. A white mask protects the whole image.
+
+Applies exposure, a filmic luminance curve, highlight shoulder, black lift,
+midtone contrast, cool shadows/warm highlights, saturation and green/blue taming,
+color density, warm highlight-edge halation, diffuse neutral bloom, lens softness,
+selective sharpening, local contrast, vignette, subtle radial chromatic aberration,
+optional lens distortion, and seeded luminance-dependent color grain.
+
+Start with **Subtle Film**, `strength=1.0`, and the supplied defaults: contrast
+0.15, highlight rolloff 0.25, saturation -0.08, color density 0.12, halation 0.06,
+bloom 0.04, grain 0.06, vignette 0.08. The defaults are intentionally subtle.
+Use strength 0.5 for a lighter finish. `enabled=false`, `strength=0`, and
+**Off / Neutral** each return the original image exactly without processing.
+
+Main controls:
+
+* `strength` blends the completed look with the original (0–1).
+* `preset`: **Subtle Film**, **Commercial Cinematic**, **Moody**, **Warm Premium**,
+  **Cool Night**, or **Off / Neutral**. Presets apply in Python, including API
+  workflows. Sliders are trims relative to the Subtle Film defaults: for example,
+  Moody sets contrast to 0.22; moving the contrast slider from 0.15 to 0.20 makes
+  effective contrast 0.27. Effective values stay within the widget limits.
+  Presets do not rewrite widget values; Off / Neutral bypasses all slider edits.
+* `exposure` multiplies input brightness by powers of two before tone mapping;
+  `contrast`, `black_lift`, `highlight_rolloff`, and `midtone_contrast` shape tone.
+* `saturation` adjusts chroma; `color_density` darkens chromatic midtones for richer
+  color without a saturation boost. `shadow_cool`/`highlight_warm` split tone;
+  `green_tame`/`blue_tame` reduce dominant greens/blues; `skin_protect` weights
+  color protection and subject detail enhancement.
+* Halation/bloom strengths set glow amount; thresholds isolate bright sources;
+  blur values are Gaussian sigma in pixels at a 1080-pixel short edge, scaled
+  with resolution (minimum scale 0.5). Bloom has an additional diffuse radius.
+* `lens_softness` mixes in slight blur; `sharpen_amount` restores luminance detail
+  with noise suppression and bounded halos; `local_contrast` shapes broader detail.
+* `grain_strength`, `grain_size`, and `grain_chroma` adjust amplitude, particle
+  size and color variation. Size scales with resolution, with a one-pixel minimum.
+  `grain_seed` is reproducible without changing global Torch random state.
+  `grain_animation_safe=false` repeats the same pattern at the same seed and size;
+  true uses seed + batch index for repeatable variation. For separately queued
+  frames, vary the seed explicitly if desired. Neither mode tracks subject motion
+  or guarantees flicker-free video; zero grain gives the most stable finish.
+* `vignette_feather` sets edge softness; `chromatic_aberration` is approximately
+  per-channel pixels at a 1080-pixel frame edge; `lens_distortion` is a small
+  signed radial coefficient, default 0.
+* `advanced_mode` defaults false. This pack uses the permitted all-visible UI
+  fallback: all controls are ordered by group, and both modes execute identically.
+
+Usage/test in ComfyUI: restart, add **mAI Cinematic Post**, and connect
+**Load Image / VAE Decode → mAI Cinematic Post → Preview Image / Save Image**.
+Compare Subtle Film with Off / Neutral on a portrait and an image containing bright
+lights. Optionally connect a subject mask, try presets, and requeue with a fixed
+grain seed. Automated checks: `python -m pytest tests/test_cinematic_post.py`.
+
+Limitations/tradeoffs: this is an artistic display-referred RGB finish, not a
+scene-linear/HDR color-management transform, stock emulation or skin detector.
+Use RGB images; alpha and empty image batches are rejected. Processing uses
+float32 internally and clamps the final result to 0–1; extreme settings can lose
+detail. Grain is repeatable on the same device/runtime, not bit-identical across
+CPU and CUDA. Frames are processed one at a time to limit intermediate memory;
+large blurs use reduced resolution, trading some accuracy for speed. Processing
+stays on the input device (typical ComfyUI images arrive on CPU); it does not move
+images to a GPU automatically. No added dependencies or frontend extension.
+The optional before/after output is omitted; compare with a separate preview.
+
 ## mAI image aspect ratio
 
 Location: `mAI / Image`. Registered as `MAIImageAspectRatio`.

@@ -1,4 +1,5 @@
 from .nodes.background_lighting_match import MAIBackgroundLightingMatch
+from .nodes.cinematic_post import mAI_CinematicPost
 from .nodes.composite_layer_node import MAICompositeLayer
 from .nodes.example_text_node import MAIExampleTextNode
 from .nodes.image_aspect_ratio import MAIImageAspectRatio
@@ -31,6 +32,7 @@ except CropAndStitchDependencyError as exc:
         )
 
 NODE_CLASS_MAPPINGS = {
+    "mAI_CinematicPost": mAI_CinematicPost,
     "MAIBackgroundLightingMatch": MAIBackgroundLightingMatch,
     "MAICompositeLayer": MAICompositeLayer,
     "MAIExampleTextNode": MAIExampleTextNode,
@@ -47,6 +49,7 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
+    "mAI_CinematicPost": "mAI Cinematic Post",
     "MAIBackgroundLightingMatch": "mAI background lighting match",
     "MAICompositeLayer": "mAI Composite Layer",
     "MAIExampleTextNode": "mAI Example Text Node",
