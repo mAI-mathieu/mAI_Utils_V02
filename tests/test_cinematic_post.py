@@ -1,5 +1,7 @@
 import importlib.util
 import math
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -110,6 +112,41 @@ def test_presets_and_control_trims():
         for other in outputs[:index]:
             assert not torch.equal(output, other)
     assert torch.equal(cinematic_post(image, advanced_mode=False), cinematic_post(image, advanced_mode=True))
+
+
+def test_commercial_preserve_colors_keeps_palette_closer_to_input():
+    colors = torch.tensor([
+        [0.65, 0.35, 0.2], [0.18, 0.6, 0.24], [0.16, 0.28, 0.65],
+        [0.6, 0.22, 0.28], [0.5, 0.5, 0.5],
+    ])
+    image = colors[:, None, None, :].expand(-1, 12, 12, -1)
+    original = cinematic_post(image, preset="Commercial Cinematic")
+    preserved = cinematic_post(image, preset="Commercial Cinematic - Preserve Colors")
+
+    def chromaticity(value):
+        return value / value.sum(dim=-1, keepdim=True).clamp_min(1e-6)
+
+    original_error = (chromaticity(original) - chromaticity(image)).abs().mean()
+    preserved_error = (chromaticity(preserved) - chromaticity(image)).abs().mean()
+    assert preserved_error < original_error * 0.5
+    old = resolve_settings("Commercial Cinematic")
+    new = resolve_settings("Commercial Cinematic - Preserve Colors")
+    for key in ("contrast", "black_lift", "grain_strength", "halation_strength", "bloom_strength"):
+        assert new[key] == old[key]
+    assert new["saturation"] == 0
+    assert new["shadow_cool"] == new["highlight_warm"] == 0
+    assert new["green_tame"] == new["blue_tame"] == 0
+    assert old["color_density"] == 0.18
+    assert new["color_density"] == pytest.approx(0.04)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js unavailable for frontend checks")
+def test_frontend_visibility_and_workflow_persistence():
+    script = Path(__file__).with_name("cinematic_post_frontend.mjs")
+    result = subprocess.run(
+        [shutil.which("node"), str(script)], capture_output=True, text=True, timeout=20,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_filmic_curve_is_monotonic_and_lifts_black_with_smooth_shoulder():
@@ -235,3 +272,5 @@ def test_node_contract_and_pack_registration(monkeypatch):
     assert mAI_CinematicPost.CATEGORY == "mAI / Image"
     assert "MAIBackgroundLightingMatch" in package.NODE_CLASS_MAPPINGS
     assert "MAIVideoLoader" in package.NODE_CLASS_MAPPINGS
+    assert package.WEB_DIRECTORY == "./web"
+    assert (root / package.WEB_DIRECTORY / "js" / "cinematic_post.js").is_file()

@@ -31,8 +31,13 @@ Use strength 0.5 for a lighter finish. `enabled=false`, `strength=0`, and
 Main controls:
 
 * `strength` blends the completed look with the original (0–1).
-* `preset`: **Subtle Film**, **Commercial Cinematic**, **Moody**, **Warm Premium**,
-  **Cool Night**, or **Off / Neutral**. Presets apply in Python, including API
+* `preset`: **Subtle Film**, **Commercial Cinematic**,
+  **Commercial Cinematic - Preserve Colors**, **Moody**, **Warm Premium**,
+  **Cool Night**, or **Off / Neutral**. The Preserve Colors variant keeps the
+  commercial contrast, black level and optical effects while removing split
+  toning, global saturation reduction, and green/blue taming; density drops from
+  0.18 to 0.04. It preserves the original palette more closely, but tone and glow
+  still affect the final colors. Presets apply in Python, including API
   workflows. Sliders are trims relative to the Subtle Film defaults: for example,
   Moody sets contrast to 0.22; moving the contrast slider from 0.15 to 0.20 makes
   effective contrast 0.27. Effective values stay within the widget limits.
@@ -58,14 +63,22 @@ Main controls:
 * `vignette_feather` sets edge softness; `chromatic_aberration` is approximately
   per-channel pixels at a 1080-pixel frame edge; `lens_distortion` is a small
   signed radial coefficient, default 0.
-* `advanced_mode` defaults false. This pack uses the permitted all-visible UI
-  fallback: all controls are ordered by group, and both modes execute identically.
+* `advanced_mode` defaults false: show only enabled, preset, advanced_mode,
+  strength, contrast, highlight_rolloff, saturation, color_density,
+  halation_strength, bloom_strength, grain_strength and vignette_strength.
+  Set true to show all controls. Hidden controls keep their values, still affect
+  processing, and survive workflow save/load. Connected controls remain visible.
 
 Usage/test in ComfyUI: restart, add **mAI Cinematic Post**, and connect
 **Load Image / VAE Decode → mAI Cinematic Post → Preview Image / Save Image**.
 Compare Subtle Film with Off / Neutral on a portrait and an image containing bright
 lights. Optionally connect a subject mask, try presets, and requeue with a fixed
 grain seed. Automated checks: `python -m pytest tests/test_cinematic_post.py`.
+After this update, restart ComfyUI and hard-refresh the browser (Ctrl+F5) to load
+the new frontend extension and preset. Toggle advanced_mode false/true and reload
+a saved workflow to check compact layout and retained values. Existing workflows
+with advanced_mode=true remain expanded. Existing slider edits also remain preset
+trims; use the default sliders on a fresh node to evaluate the new base look.
 
 Limitations/tradeoffs: this is an artistic display-referred RGB finish, not a
 scene-linear/HDR color-management transform, stock emulation or skin detector.
@@ -75,7 +88,10 @@ detail. Grain is repeatable on the same device/runtime, not bit-identical across
 CPU and CUDA. Frames are processed one at a time to limit intermediate memory;
 large blurs use reduced resolution, trading some accuracy for speed. Processing
 stays on the input device (typical ComfyUI images arrive on CPU); it does not move
-images to a GPU automatically. No added dependencies or frontend extension.
+images to a GPU automatically. No added dependencies. Widget hiding uses the
+frontend's [native hidden flag](https://github.com/Comfy-Org/ComfyUI_frontend/blob/v1.51.10/src/lib/litegraph/src/LGraphNode.ts#L3772)
+(checked against frontend 1.51.10 source). If the
+extension fails to load, processing still works with all controls visible.
 The optional before/after output is omitted; compare with a separate preview.
 
 ## mAI image aspect ratio

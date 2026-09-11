@@ -56,6 +56,11 @@ PRESETS = {
         "contrast": 0.22, "black_lift": 0.02, "color_density": 0.18,
         "shadow_cool": 0.12, "highlight_warm": 0.10, "grain_strength": 0.04,
     },
+    "Commercial Cinematic - Preserve Colors": {
+        "contrast": 0.22, "black_lift": 0.02, "color_density": 0.04,
+        "saturation": 0.0, "shadow_cool": 0.0, "highlight_warm": 0.0,
+        "green_tame": 0.0, "blue_tame": 0.0, "grain_strength": 0.04,
+    },
     "Moody": {
         "exposure": -0.25, "contrast": 0.22, "saturation": -0.16,
         "shadow_cool": 0.16, "highlight_warm": 0.04, "vignette_strength": 0.16,
@@ -315,8 +320,8 @@ def cinematic_post(image, subject_mask=None, enabled=True, preset="Subtle Film",
                    advanced_mode=False, grain_seed=0, grain_animation_safe=False, **controls):
     """Process BHWC float RGB on its existing device, preserving shape/dtype.
 
-    advanced_mode is a reserved UI hint: this pack uses the all-visible widget
-    fallback. It never disables controls or changes execution.
+    advanced_mode controls frontend visibility only. Hidden controls retain
+    their values; the toggle never disables processing or changes execution.
     """
     if not torch.is_tensor(image) or not torch.is_floating_point(image):
         raise TypeError("image must be a floating-point torch tensor")

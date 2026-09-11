@@ -13,7 +13,7 @@ class mAI_CinematicPost:
     DESCRIPTION = (
         "Restrained cinematic tone, color, optics and grain. Presets set a base "
         "look; sliders trim it relative to Subtle Film defaults. Off / Neutral "
-        "bypasses processing. All controls remain visible in this pack."
+        "bypasses processing. Enable advanced_mode to show all controls."
     )
 
     @classmethod
@@ -23,7 +23,7 @@ class mAI_CinematicPost:
             "preset": (list(PRESETS), {"default": "Subtle Film"}),
             "advanced_mode": ("BOOLEAN", {
                 "default": False,
-                "tooltip": "UI hint only: this pack keeps all controls visible in both modes.",
+                "tooltip": "Show all controls. Hidden controls retain their values and still apply.",
             }),
         }
         for name, (default, minimum, maximum, step) in FLOAT_CONTROLS.items():
