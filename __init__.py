@@ -1,6 +1,7 @@
 from .nodes.background_lighting_match import MAIBackgroundLightingMatch
 from .nodes.cinematic_post import mAI_CinematicPost
 from .nodes.composite_layer_node import MAICompositeLayer
+from .nodes.conditional_lora import MAIConditionalLora
 from .nodes.example_text_node import MAIExampleTextNode
 from .nodes.image_aspect_ratio import MAIImageAspectRatio
 from .nodes.krea2_image_conditioning import MAIKrea2ImageConditioning
@@ -35,6 +36,7 @@ NODE_CLASS_MAPPINGS = {
     "mAI_CinematicPost": mAI_CinematicPost,
     "MAIBackgroundLightingMatch": MAIBackgroundLightingMatch,
     "MAICompositeLayer": MAICompositeLayer,
+    "MAIConditionalLora": MAIConditionalLora,
     "MAIExampleTextNode": MAIExampleTextNode,
     "MAIImageAspectRatio": MAIImageAspectRatio,
     "MAIKrea2ImageConditioning": MAIKrea2ImageConditioning,
@@ -52,6 +54,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "mAI_CinematicPost": "mAI Cinematic Post",
     "MAIBackgroundLightingMatch": "mAI background lighting match",
     "MAICompositeLayer": "mAI Composite Layer",
+    "MAIConditionalLora": "mAI conditional LoRA",
     "MAIExampleTextNode": "mAI Example Text Node",
     "MAIImageAspectRatio": "mAI image aspect ratio",
     "MAIKrea2ImageConditioning": "mAI Krea2 image conditioning",

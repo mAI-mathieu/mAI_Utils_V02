@@ -5,6 +5,43 @@ ComfyUI custom node pack for small, reusable mAI utility nodes.
 Install this folder under ComfyUI's `custom_nodes` directory, then restart ComfyUI.
 The currently registered nodes are listed below.
 
+## mAI conditional LoRA
+
+Location: `mAI / Utils`. Registered as `MAIConditionalLora`.
+
+Applies a selected LoRA only when the prompt contains any configured trigger.
+Inputs: `model` (MODEL), optional `clip` (CLIP), `lora_name` (installed LoRA dropdown),
+`prompt` (STRING socket), `strength` (FLOAT, default 1.0, range -100 to 100),
+and `trigger_words` (multiline STRING, blank by default; can be converted to an input).
+Without CLIP, only MODEL is patched. When CLIP is connected, the same strength
+applies to both MODEL and CLIP.
+Outputs, in order: `model` (MODEL), `clip` (CLIP), `prompt` (STRING, unchanged).
+If CLIP is omitted, its output is `None`; leave that output disconnected and
+connect your original text encoder directly to the text encoding nodes.
+
+Separate triggers with commas or newlines; each entry is a whole word or phrase.
+Any match activates the LoRA once. Matching ignores case and normalizes whitespace;
+`cat` matches `(cat:1.2)` but not `cathedral`. Special characters are literal,
+not regular expressions. Blank triggers, an empty prompt, no match, or strength
+zero return the original inputs without loading a LoRA file. Switching from a
+match to no match returns the incoming MODEL and CLIP, without this node's LoRA.
+
+Test in ComfyUI: restart, add **mAI conditional LoRA**, and connect a checkpoint's
+MODEL. Select a compatible LoRA, set `trigger_words` to its trigger, and
+connect a text source to `prompt`. Connect output MODEL to the sampler and output
+`prompt` to the positive text encoder. For a model-only LoRA, leave CLIP input
+and output disconnected. To also patch the text encoder, connect CLIP through
+this node and use its CLIP output for text encoding.
+Compare prompts with and without the trigger at a fixed seed; also try strength
+zero. Multiple nodes can be chained to conditionally apply different LoRAs.
+
+Limitations: requires MODEL; uses ComfyUI's native LoRA compatibility
+and loading behavior. Matching is literal text, so negated wording such as
+`no cat` still matches `cat`. Triggers cannot contain commas or newlines.
+Does not insert trigger words or remove LoRAs already applied upstream.
+No extra dependencies or frontend extension required.
+Automated tests: `python -m pytest tests/test_lora_triggers.py tests/test_conditional_lora.py`.
+
 ## mAI Cinematic Post
 
 Location: `mAI / Image`. Registered as `mAI_CinematicPost` (the explicitly
