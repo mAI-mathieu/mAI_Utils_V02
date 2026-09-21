@@ -335,6 +335,35 @@ Known limitations:
 * A video without an audio stream returns no `AUDIO` value. Nodes that require
   audio should only be connected when the source contains audio.
 
+## mAI trim frame sequence
+
+Location: `mAI / Image`. Registered as `MAITrimFrameSequence`.
+
+Trims frames from an image batch or an ordered list of image frames/batches.
+Inputs: `frames` (`IMAGE`), `trim_mode`, and `trim_amount` (non-negative integer).
+Outputs, in order: `frames` (`IMAGE`, one batch), `frame_count` (`INT`, remaining frames).
+
+* `start` removes the first `trim_amount` frames.
+* `end` removes the last `trim_amount` frames.
+* `both ends` removes `trim_amount` frames **from each end**.
+
+Defaults: `start`, amount `0` (keeps all frames). List inputs are treated as one
+continuous sequence in their original order, including lists of multi-frame batches.
+For 10 frames and amount 2, start/end leave 8 frames; both ends leaves 6.
+Pixel values, tensor dtype, and device are preserved.
+
+Limitations: at least one frame must remain; empty inputs or trims removing every
+frame raise a clear error. All frames must share dimensions, channels, dtype, and
+device. Output is always a batch; combining lists allocates memory for retained
+frames. This node trims images only; audio and FPS are not adjusted. Connected
+trim settings must each supply one value for the entire sequence.
+
+Test in ComfyUI: restart, add **mAI trim frame sequence**, connect an image batch
+(for example, `frames` from **mAI video loader**), and connect the result to
+Preview Image or a video encoder. Try all three modes with amount 2 and check
+the retained first/last frames and `frame_count`. Also try an IMAGE list source.
+Automated tests: `python -m pytest tests/test_frame_sequence.py tests/test_trim_frame_sequence.py`.
+
 ## mAI Inpaint Crop - Separate Stitch Mask
 
 Location:

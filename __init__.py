@@ -11,6 +11,7 @@ from .nodes.prepare_image_for_minimax_h3 import MAIPrepareImageForMinimaxH3
 from .nodes.random_line_node import MAIRandomLine
 from .nodes.save_text_file_node import MAISaveTextFile
 from .nodes.text_sequence_randomizer import MAITextSequenceRandomizer
+from .nodes.trim_frame_sequence import MAITrimFrameSequence
 from .nodes.type_converter_node import MAITypeConverterNode
 from .nodes.video_loader import MAIVideoLoader
 from .utils.cropandstitch_dependency import CropAndStitchDependencyError
@@ -46,6 +47,7 @@ NODE_CLASS_MAPPINGS = {
     "MAIRandomLine": MAIRandomLine,
     "MAISaveTextFile": MAISaveTextFile,
     "MAITextSequenceRandomizer": MAITextSequenceRandomizer,
+    "MAITrimFrameSequence": MAITrimFrameSequence,
     "MAITypeConverterNode": MAITypeConverterNode,
     "MAIVideoLoader": MAIVideoLoader,
 }
@@ -64,6 +66,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MAIRandomLine": "mAI Random Line",
     "MAISaveTextFile": "mAI Save Text File",
     "MAITextSequenceRandomizer": "mAI text sequence randomizer",
+    "MAITrimFrameSequence": "mAI trim frame sequence",
     "MAITypeConverterNode": "mAI Type Converter",
     "MAIVideoLoader": "mAI video loader",
 }
