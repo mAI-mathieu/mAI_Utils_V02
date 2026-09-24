@@ -5,6 +5,31 @@ ComfyUI custom node pack for small, reusable mAI utility nodes.
 Install this folder under ComfyUI's `custom_nodes` directory, then restart ComfyUI.
 The currently registered nodes are listed below.
 
+## mAI image gate
+
+Location: `mAI / Image`. Registered as `MAIImageGate`.
+
+Inputs: `enabled` (BOOLEAN, default true; can be converted to an input for an
+external boolean) and optional `image` (IMAGE). Output: `image` (IMAGE).
+True passes the exact original image or image batch without copying or modifying
+it. False outputs `None`. An unconnected image input also outputs `None`.
+The image input is lazy: when disabled, this gate does not request its upstream
+image branch. Other consumers may still cause that branch to execute.
+
+Only connect to downstream inputs that explicitly handle `None` as a missing
+image. This does not actually disconnect the socket, restore a widget default,
+or skip the downstream node. Even an optional input is not guaranteed to accept
+`None`; nodes that inspect graph connections can still see the connection.
+Preview Image, Save Image, and other nodes requiring a real image cannot consume
+the disabled output. No additional dependencies or frontend extension required.
+
+Test in ComfyUI: restart, add **mAI image gate**, and connect Load Image to its
+image input. Connect its output to a compatible optional image input. Queue with
+enabled true, then false: the receiving node should use the image, then its
+missing-image behavior. Toggle true again to restore the image. Also try leaving
+the gate's image input unconnected. Automated tests:
+`python -m pytest tests/test_image_gate.py`.
+
 ## mAI conditional LoRA
 
 Location: `mAI / Utils`. Registered as `MAIConditionalLora`.
