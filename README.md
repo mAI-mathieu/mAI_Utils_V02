@@ -5,6 +5,39 @@ ComfyUI custom node pack for small, reusable mAI utility nodes.
 Install this folder under ComfyUI's `custom_nodes` directory, then restart ComfyUI.
 The currently registered nodes are listed below.
 
+## mAI JSON parser
+
+Location: `mAI / Text`. Registered as `MAIJsonParser`.
+
+Selects one value from pasted or connected JSON text. Inputs: `json_text`
+(multiline STRING), `key_path` (STRING, default `prompt`), and `output_type`
+(`auto` by default, or `string`). One stable wildcard output: `value`.
+In auto mode, strings, integers, floats and booleans keep their Python types.
+Objects and arrays return JSON text; JSON null returns the text `null`, never
+Python `None`. String mode always returns text (booleans become `true`/`false`,
+and selected strings are not surrounded by quotes). Numeric strings stay strings.
+
+Paths: `prompt`, `settings.width`, `items[0].name`, or `$.items[0].name`.
+Use `["key.with.dots"]` for literal keys containing punctuation, `["0"]` for
+a numeric object key, and `[""]` for an empty key. Blank or `$` selects the root;
+`[0]` selects the first item of a root array. Indices start at zero.
+Invalid JSON, missing keys, out-of-range indices and incompatible traversal
+produce clear errors. Duplicate object keys use the last value, as in Python's
+standard JSON parser. No external dependencies or frontend extension required.
+
+Test in ComfyUI: restart, add **mAI JSON parser**, and use
+`{"prompt":"a forest","settings":{"width":1024},"enabled":true}`.
+With `key_path=prompt`, connect `value` to a text input; with
+`key_path=settings.width` in auto mode, connect it to an INT input.
+Try string mode with a text display node, and save/reload the workflow.
+Both text widgets can be connected to upstream STRING outputs.
+
+Limitations: the wildcard socket permits connections, but the selected runtime
+type must match the downstream input. This is a single-value selector, with no
+wildcards, filters, negative indices or expression evaluation. Accepts valid JSON
+only, without Markdown fences or comments. Objects/arrays are serialized text,
+not ComfyUI batches. Automated tests: `python -m pytest tests/test_json_parser.py`.
+
 ## mAI image gate
 
 Location: `mAI / Image`. Registered as `MAIImageGate`.
