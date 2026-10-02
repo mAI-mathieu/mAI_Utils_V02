@@ -11,7 +11,7 @@ import torch.nn.functional as F
 NATIVE_METHODS = ("nearest", "nearest-exact", "bilinear", "bicubic", "area")
 CUSTOM_METHODS = ("lanczos2", "lanczos3", "lanczos4", "mitchell", "catmull_rom")
 RESIZE_METHODS = ("auto",) + NATIVE_METHODS + CUSTOM_METHODS
-RESIZE_MODES = ("exact", "keep_aspect_fit", "keep_aspect_fill")
+RESIZE_MODES = ("exact", "keep_aspect_fit", "keep_aspect_fill", "keep_aspect")
 # Custom passes hold only one sampled plane per tap. Bound their batch working
 # set conservatively, independently of free VRAM, without probing for OOM.
 CUSTOM_WORKING_BYTES = 512 * 1024 * 1024
@@ -40,7 +40,7 @@ class ResizeGeometry:
 
 def calculate_target_size(source_width, source_height, width, height,
                           resize_mode="exact", multiple_of=1):
-    """Round the final canvas first, then derive a centered fit/fill geometry."""
+    """Resolve canvas geometry, or fitted image dimensions for keep_aspect."""
     source_width = _positive_integer(source_width, "Source width")
     source_height = _positive_integer(source_height, "Source height")
     width = apply_multiple_of(width, multiple_of)
@@ -50,12 +50,18 @@ def calculate_target_size(source_width, source_height, width, height,
     if resize_mode == "exact":
         return ResizeGeometry(width, height, width, height)
     width_limits = width * source_height <= height * source_width
-    if resize_mode == "keep_aspect_fit":
+    if resize_mode in ("keep_aspect_fit", "keep_aspect"):
         if width_limits:
             rh = max(1, (2 * source_height * width + source_width) // (2 * source_width))
-            return ResizeGeometry(width, height, width, min(height, rh))
-        rw = max(1, (2 * source_width * height + source_height) // (2 * source_height))
-        return ResizeGeometry(width, height, min(width, rw), height)
+            rw, rh = width, min(height, rh)
+        else:
+            rw = max(1, (2 * source_width * height + source_height) // (2 * source_height))
+            rw, rh = min(width, rw), height
+        if resize_mode == "keep_aspect":
+            rw = apply_multiple_of(rw, multiple_of)
+            rh = apply_multiple_of(rh, multiple_of)
+            return ResizeGeometry(rw, rh, rw, rh)
+        return ResizeGeometry(width, height, rw, rh)
     if width_limits:
         rw = (source_width * height + source_height - 1) // source_height
         return ResizeGeometry(width, height, max(width, rw), height)

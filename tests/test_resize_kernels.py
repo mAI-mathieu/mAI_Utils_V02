@@ -86,6 +86,48 @@ def test_scaled_fill_and_odd_padding():
     assert fit[:, 0].eq(0).all() and fit[:, 1:3].eq(1).all() and fit[:, 3:].eq(0).all()
 
 
+@pytest.mark.parametrize("source,target,expected", [
+    ((1920, 1080), (1024, 1024), (1024, 576)),
+    ((1080, 1920), (1024, 1024), (576, 1024)),
+    ((800, 800), (640, 480), (480, 480)),
+    ((16, 9), (64, 36), (64, 36)),
+    ((3, 2), (5, 5), (5, 3)),
+    ((1000, 1), (10, 10), (10, 1)),
+    ((1, 1000), (10, 10), (1, 10)),
+])
+def test_keep_aspect_dimensions(source, target, expected):
+    geometry = calculate_target_size(*source, *target, "keep_aspect")
+    assert (geometry.width, geometry.height) == expected
+    assert (geometry.resize_width, geometry.resize_height) == expected
+
+
+def test_keep_aspect_rounds_output_to_multiple():
+    geometry = calculate_target_size(1920, 1080, 1000, 1000, "keep_aspect", 8)
+    assert (geometry.width, geometry.height) == (1000, 560)
+    assert (geometry.resize_width, geometry.resize_height) == (1000, 560)
+
+
+@pytest.mark.parametrize("method", RESIZE_METHODS)
+@pytest.mark.parametrize("chunk_size", [0, 2])
+def test_keep_aspect_preserves_entire_image_and_batch(method, chunk_size):
+    image = torch.linspace(0.1, 0.9, 3 * 6 * 10 * 4).reshape(3, 6, 10, 4)
+    before = image.clone()
+    result, w, h, used = resize_image_batch(
+        image, 5, 5, "keep_aspect", method, chunk_size=chunk_size,
+    )
+    expected = resize_image_batch(image, 5, 3, "exact", method)[0]
+    assert result.shape == (3, 3, 5, 4) and (w, h) == (5, 3)
+    assert used == ("lanczos3" if method == "auto" else method)
+    torch.testing.assert_close(result, expected)
+    torch.testing.assert_close(image, before)
+
+
+def test_keep_aspect_identity_uses_fitted_dimensions():
+    image = torch.ones(2, 9, 16, 3)
+    result, w, h, used = resize_image_batch(image, 16, 16, "keep_aspect")
+    assert result is image and (w, h, used) == (16, 9, "identity")
+
+
 @pytest.mark.parametrize("dimension,multiple,expected", [(1023,8,1024),(1019,8,1016),(1020,8,1024),(1018,8,1016),(1,64,64),(1,1,1)])
 def test_multiple_rounding(dimension, multiple, expected):
     assert apply_multiple_of(dimension, multiple) == expected

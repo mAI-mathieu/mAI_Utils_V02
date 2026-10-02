@@ -39,6 +39,7 @@ class MAIFastGPUResize:
     DESCRIPTION = (
         "Batched torch resize with native, Lanczos and BC cubic kernels. "
         "Auto device keeps the input device; select gpu to move CPU images to CUDA. "
+        "Keep aspect fits within width/height without padding or cropping. "
         "Fit pads black; fill crops from the center."
     )
 
@@ -48,7 +49,8 @@ class MAIFastGPUResize:
             "image": ("IMAGE",),
             "width": ("INT", {"default": 1280, "min": 1, "max": 16384}),
             "height": ("INT", {"default": 720, "min": 1, "max": 16384}),
-            "resize_mode": (list(RESIZE_MODES), {"default": "exact"}),
+            "resize_mode": (list(RESIZE_MODES), {"default": "exact",
+                                               "tooltip": "keep_aspect fits within width/height without padding or cropping; output dimensions may differ. Use multiple_of=1 for the closest original ratio."}),
             "method": (list(RESIZE_METHODS), {"default": "auto"}),
             "antialias": ("BOOLEAN", {"default": True}),
             "multiple_of": ("INT", {"default": 1, "min": 1, "max": 16384, "step": 1,

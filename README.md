@@ -109,8 +109,14 @@ Outputs in order: `image` (IMAGE), `width` (INT), `height` (INT),
 
 Defaults: 1280×720, `exact`, `auto` method/device/precision, antialias enabled,
 multiple 1, chunk size 0. Modes: `exact` stretches; `keep_aspect_fit` centers the
-image on a black canvas; `keep_aspect_fill` centers and crops overflow. Odd
-padding/crop differences put the extra pixel on the bottom/right. Dimensions
+image on a black canvas; `keep_aspect_fill` centers and crops overflow.
+`keep_aspect` fits the whole image within the requested width/height without
+padding or cropping, returning its actual dimensions: 1920×1080 into 1024×1024
+produces 1024×576. It supports both upscaling and downscaling. Integer pixel
+rounding can slightly alter the ratio; use `multiple_of=1` for the closest match.
+With larger multiples, the bounds are rounded first and the fitted output
+dimensions are also rounded to that multiple, which can further alter the ratio.
+Odd padding/crop differences put the extra pixel on the bottom/right. Dimensions
 round to the nearest `multiple_of` number (INT widget, 1–16384, also connectable
 to an INT output), ties upward, minimum one multiple. Common choices are
 8/16/32/64; 1 disables rounding. For multiple 8: 1023→1024, 1020→1024,
@@ -159,7 +165,9 @@ Test in ComfyUI: restart, search **mAI Fast GPU Resize**, connect an H3/LTX IMAG
 batch to `image`, set 1024×576 and `device=gpu`, then connect the IMAGE output
 to Preview Image or a video encoder. Check frame order and the width/height/
 method diagnostics. Try 1024×1024 with fit/fill and chunk size 32; save and
-reload the workflow. Automated tests:
+reload the workflow. Try `keep_aspect` on a 16:9 image with width/height 1024,
+`multiple_of=1`: verify a 1024×576 output with no borders or cropping.
+Automated tests:
 `python -m pytest tests/test_resize_kernels.py tests/test_fast_gpu_resize.py tests/test_gpu_memory.py`.
 Benchmark: `python scripts/benchmark_fast_gpu_resize.py --direct` (CUDA), or
 `--device cpu --smoke`. Measurements and architecture details:

@@ -29,6 +29,8 @@ def test_node_contract_and_defaults():
     assert node.RETURN_NAMES == ("image", "width", "height", "method_used")
     assert inputs["multiple_of"][0] == "INT"
     assert inputs["multiple_of"][1]["min"] == 1
+    assert inputs["resize_mode"][0] == ["exact", "keep_aspect_fit", "keep_aspect_fill", "keep_aspect"]
+    assert inputs["resize_mode"][1]["default"] == "exact"
     defaults = {name:spec[1]["default"] for name,spec in inputs.items() if name != "image"}
     image = torch.ones(1,720,1280,3)
     result,w,h,used = node.run(image, **defaults)
@@ -36,6 +38,15 @@ def test_node_contract_and_defaults():
     # A number outside the former presets also works as a connected INT value.
     result,w,h,_ = node.run(torch.ones(1,4,8,3),25,26,method="nearest",multiple_of=3)
     assert result.shape == (1,27,24,3) and (w,h) == (24,27)
+
+
+def test_node_keep_aspect_returns_actual_dimensions_without_padding():
+    result, w, h, used = MAIFastGPUResize().run(
+        torch.ones(2, 9, 16, 3), 32, 32, resize_mode="keep_aspect", method="nearest",
+    )
+    assert result.shape == (2, 18, 32, 3)
+    assert (w, h, used) == (32, 18, "nearest")
+    assert result.eq(1).all()
 
 
 @pytest.mark.parametrize("precision,dtype", [("fp32",torch.float32),("fp16",torch.float16),("bf16",torch.bfloat16)])
