@@ -74,7 +74,16 @@ encoder and NV12 support. FFmpeg is discovered on PATH, with an existing
 the node, but encoding requires NVENC; unavailable codecs/drivers produce a
 clear error without silent software fallback. GPU dimension limits still apply,
 especially to tiny images or very large resolutions. The full input batch remains
-in memory; chunking bounds conversion buffers rather than model VRAM.
+in memory; chunking bounds conversion buffers. Before encoding, unused CUDA
+cache is released and ComfyUI is asked to offload models if free VRAM is below
+the estimated conversion budget plus 2 GiB for NVENC's separate CUDA context.
+After success, failure or cancellation, unused cache is released again.
+An explicit FFmpeg `CUDA_ERROR_OUT_OF_MEMORY` triggers one retry after requesting
+model offloading on the affected GPUs, with one-frame conversion chunks.
+Models may reload later in the workflow. This cannot free live frame tensors or
+memory owned by other processes and does not guarantee against OOM.
+With multiple GPUs, set `gpu_device` explicitly: automatic NVENC preparation
+targets the first visible CUDA GPU, while FFmpeg can select another capable GPU.
 
 Test in ComfyUI: restart, search **mAI GPU Video Combine**, connect `frames`,
 `audio` and `fps` from **mAI video loader** (or frames from **mAI Fast GPU Resize**),
@@ -130,11 +139,16 @@ filtering and copying, while honoring explicit device/dtype changes.
 batch chunks from a conservative 512 MiB working-memory estimate. Positive
 values specify the batch chunk size. Tables are built once and reused by every
 chunk. Only chunk and kernel-tap loops are used, never per-frame resizing.
-The node uses no PIL/OpenCV/NumPy path and adds no dependencies.
+The node uses no PIL/OpenCV/NumPy path and adds no dependencies. GPU execution
+releases unused CUDA cache, requests ComfyUI model offloading when the estimated
+output/scratch budget exceeds free VRAM, and releases unused cache after each
+operation, including errors/cancellation. Live input/output tensors stay on
+their selected device. CPU execution and unchanged device/dtype identity
+bypasses do not run CUDA cleanup. Model offloading can cause later reloads.
 
 Limitations: input must be one nonempty BHWC floating-point tensor; IMAGE lists
 are not accepted. Chunking bounds temporary working memory, but the full output
-and input still need memory; it does not offload models or guarantee against OOM.
+and input still need memory; memory preparation does not guarantee against OOM.
 Extreme fill aspect ratios or very large single images can need large intermediates.
 Custom kernels are slower than native methods; FP32 accumulation costs memory.
 Alpha is filtered like any other channel, without premultiplication. CUDA is
@@ -146,7 +160,7 @@ batch to `image`, set 1024×576 and `device=gpu`, then connect the IMAGE output
 to Preview Image or a video encoder. Check frame order and the width/height/
 method diagnostics. Try 1024×1024 with fit/fill and chunk size 32; save and
 reload the workflow. Automated tests:
-`python -m pytest tests/test_resize_kernels.py tests/test_fast_gpu_resize.py`.
+`python -m pytest tests/test_resize_kernels.py tests/test_fast_gpu_resize.py tests/test_gpu_memory.py`.
 Benchmark: `python scripts/benchmark_fast_gpu_resize.py --direct` (CUDA), or
 `--device cpu --smoke`. Measurements and architecture details:
 [Fast GPU Resize notes](docs/fast_gpu_resize.md).

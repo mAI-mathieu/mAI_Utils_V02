@@ -78,3 +78,26 @@ def test_explicit_device_transfers_and_auto_keeps_cuda():
     cpu = MAIFastGPUResize().run(gpu,6,4,device="cpu")[0]
     assert cpu.device.type == "cpu"
     torch.testing.assert_close(cpu,gpu.cpu())
+
+
+def test_identity_and_cpu_skip_gpu_memory_management(monkeypatch):
+    import utils.gpu_memory as memory
+    def forbidden(*args, **kwargs):
+        raise AssertionError("CUDA memory management touched")
+    monkeypatch.setattr(memory, "prepare_gpu_memory", forbidden)
+    monkeypatch.setattr(memory, "release_gpu_cache", forbidden)
+    image = torch.ones(2,8,12,3)
+    assert MAIFastGPUResize().run(image,12,8)[0] is image
+    assert MAIFastGPUResize().run(image,6,4)[0].shape == (2,4,6,3)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(),reason="CUDA unavailable")
+def test_resize_returns_unused_vram_to_driver_and_preserves_live_tensors():
+    image = torch.rand(2,32,48,3,device="cuda")
+    before = image.cpu()
+    scratch = torch.empty(32*1024*1024,device="cuda")
+    del scratch
+    result = MAIFastGPUResize().run(image,24,16,method="lanczos3")[0]
+    assert result.device == image.device and result.shape == (2,16,24,3)
+    torch.testing.assert_close(image.cpu(),before)
+    assert torch.cuda.memory_reserved() - torch.cuda.memory_allocated() < 32*1024*1024

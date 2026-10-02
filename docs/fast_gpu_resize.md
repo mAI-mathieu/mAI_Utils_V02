@@ -41,13 +41,23 @@ an estimate, not a strict allocator limit. The full input/output are additional;
 one very large frame can exceed the estimate. Native methods process the whole
 batch at chunk size 0, so explicit chunking can also reduce their working memory.
 
+GPU execution now uses `utils/gpu_memory.py` to release unused CUDA cache before
+work and after success/failure/cancellation. It estimates full output plus chunk
+scratch and requests ComfyUI model offloading on the processing GPU only when
+driver-visible free memory is below that budget. Source CUDA cache is also
+released when explicitly moving results to CPU. Models may reload later, and
+live input/output tensors remain allocated. CPU operations and matching
+device/dtype identity bypasses skip CUDA cleanup. No node sockets changed.
+Cleanup cannot free other processes' memory or guarantee that a huge output fits.
+
 ## CUDA benchmark, 2026-10-02
 
 NVIDIA GeForce RTX 5090, PyTorch 2.7.1+cu128, FP32 RGB, Windows.
 Antialias true, chunk size 0 (automatic custom chunking), two warmups and median
 of five measured runs. Each timed run includes table construction, allocation,
 filtering, final clipping and output processing. CUDA synchronization occurs
-before/after timings in the script only. Data is already on CUDA; transfers
+before/after timings in the script. These historical measurements predate the
+memory cleanup, which now synchronizes inside GPU execution too. Data is already on CUDA; transfers
 from a CPU IMAGE are excluded. No other test process ran during this measurement.
 
 Command:

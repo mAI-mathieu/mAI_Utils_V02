@@ -157,6 +157,73 @@ def test_missing_nvenc_is_clear(monkeypatch):
         check_nvenc_support("ffmpeg","h264_nvenc")
 
 
+@pytest.mark.parametrize("failures", [1,2])
+def test_cuda_oom_retries_once_after_scope_cleanup_with_same_codec(tmp_path,monkeypatch,failures):
+    from contextlib import contextmanager
+    import utils.video_encoding as encoding
+    events = []
+    @contextmanager
+    def scope(device,required,force_offload=False):
+        events.append(("enter",force_offload))
+        try:
+            yield
+        finally:
+            events.append(("exit",force_offload))
+    monkeypatch.setattr(encoding,"gpu_memory_scope",scope)
+    monkeypatch.setattr(encoding,"video_memory_requirements",lambda *args: {torch.device("cuda:1"): 100})
+    calls = []
+    def encode(frames,path,options,*args):
+        calls.append(options)
+        if len(calls) <= failures:
+            raise encoding.NVENCOutOfMemoryError("CUDA_ERROR_OUT_OF_MEMORY")
+        return 3,3/24
+    monkeypatch.setattr(encoding,"_encode_video",encode)
+    options = VideoEncodeOptions(codec="hevc_nvenc",chunk_size=3)
+    frames = torch.ones(3,4,4,3)
+    if failures == 2:
+        with pytest.raises(encoding.NVENCOutOfMemoryError):
+            encode_video(frames,tmp_path/"retry.mp4",options)
+    else:
+        assert encode_video(frames,tmp_path/"retry.mp4",options) == (3,3/24)
+    assert len(calls) == 2 and calls[0] == options
+    assert calls[1] == replace(options,chunk_size=1)
+    assert events == [("enter",False),("exit",False),("enter",True),("exit",True)]
+    assert frames.eq(1).all()
+
+
+@pytest.mark.parametrize("error", [RuntimeError("codec unavailable"),InterruptedError("cancelled")])
+def test_non_memory_errors_and_cancellation_never_retry(tmp_path,monkeypatch,error):
+    import utils.video_encoding as encoding
+    calls = []
+    def encode(*args):
+        calls.append(1)
+        raise error
+    monkeypatch.setattr(encoding,"_encode_video",encode)
+    with pytest.raises(type(error),match=str(error)):
+        encode_video(torch.zeros(1,4,4,3),tmp_path/"error.mp4")
+    assert len(calls) == 1
+
+
+def test_real_ffmpeg_cuda_context_error_is_classified_and_cleaned(tmp_path,monkeypatch):
+    import utils.video_encoding as encoding
+    monkeypatch.setattr(encoding,"find_ffmpeg",lambda:"ffmpeg")
+    monkeypatch.setattr(encoding,"check_nvenc_support",lambda *args:None)
+    calls = []
+    class FailedEncoder:
+        def __init__(self,*args,**kwargs):
+            self.stdin = io.BytesIO()
+            self.returncode = 1
+            kwargs["stderr"].write(b"cuCtxCreate failed -> CUDA_ERROR_OUT_OF_MEMORY: out of memory\nNo capable devices found")
+            calls.append(self)
+        def poll(self):
+            return self.returncode
+    monkeypatch.setattr(subprocess,"Popen",FailedEncoder)
+    with pytest.raises(encoding.NVENCOutOfMemoryError,match="CUDA_ERROR_OUT_OF_MEMORY"):
+        encode_video(torch.zeros(2,4,4,3),tmp_path/"failure.mp4")
+    assert len(calls) == 2 and all(call.stdin.closed for call in calls)
+    assert list(tmp_path.iterdir()) == []
+
+
 NVENC_TESTS = os.environ.get("MAI_TEST_NVENC") == "1" and shutil.which("ffmpeg") and shutil.which("ffprobe")
 nvenc = pytest.mark.skipif(not NVENC_TESTS,reason="Set MAI_TEST_NVENC=1 with FFmpeg/ffprobe and an NVENC-capable GPU")
 

@@ -220,8 +220,30 @@ def resize_image_batch(image, width, height, resize_mode="exact", method="auto",
     chunks = choose_chunk_size(image.shape[0], image.shape[3], image.shape[1:3], size,
                                (geometry.height, geometry.width), chunk_size, custom,
                                8 if work_dtype == torch.float64 else 4)
-    if same_size and image.shape[1:3] == (geometry.height, geometry.width):
-        # .to is an identity when both dtype and device already match.
+    identity = same_size and image.shape[1:3] == (geometry.height, geometry.width)
+    if identity and device == image.device and dtype == image.dtype:
+        return image, geometry.width, geometry.height, "identity"
+    from .gpu_memory import gpu_memory_scope
+
+    # Budget output plus conversion/filter scratch. This is a conservative
+    # estimate for model offloading, not a guarantee or an OOM-driven selector.
+    sh, sw = image.shape[1:3]
+    rh, rw = size
+    output_element_size = {torch.float16: 2, torch.bfloat16: 2, torch.float32: 4, torch.float64: 8}[dtype]
+    output_bytes = image.shape[0] * geometry.height * geometry.width * image.shape[3] * output_element_size
+    intermediate = min(sh * rw, rh * sw)
+    pixels = sh * sw + intermediate + 3 * max(intermediate, rh * rw) + geometry.height * geometry.width
+    scratch_bytes = chunks * image.shape[3] * pixels * (8 if work_dtype == torch.float64 else 4)
+    cleanup_device = device if device.type == "cuda" else image.device
+    required = output_bytes + scratch_bytes if device.type == "cuda" else 0
+    with gpu_memory_scope(cleanup_device, required):
+        return _resize_prepared(image, device, dtype, work_dtype, geometry, resize_mode,
+                                method_used, antialias, size, custom, chunks, identity)
+
+
+def _resize_prepared(image, device, dtype, work_dtype, geometry, resize_mode,
+                     method_used, antialias, size, custom, chunks, identity):
+    if identity:
         return image.to(device=device, dtype=dtype), geometry.width, geometry.height, "identity"
     tables = (None, None)
     horizontal_first = image.shape[1] * geometry.resize_width <= geometry.resize_height * image.shape[2]

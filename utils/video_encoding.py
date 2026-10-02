@@ -4,9 +4,10 @@ Only fixed FFmpeg argument lists are executed, with shell=False. No image
 files, shell scripts, VHS imports or per-frame conversion loops are used.
 """
 
-from dataclasses import dataclass
-from contextlib import suppress
+from dataclasses import dataclass, replace
+from contextlib import ExitStack, suppress
 import json
+import logging
 import math
 from numbers import Integral, Real
 import os
@@ -19,9 +20,15 @@ import time
 import torch
 import torch.nn.functional as F
 
+from .gpu_memory import gpu_memory_scope, video_memory_requirements
+
 
 CODECS = ("h264_nvenc", "hevc_nvenc", "av1_nvenc")
 PRESETS = tuple(f"p{i}" for i in range(1, 8))
+
+
+class NVENCOutOfMemoryError(RuntimeError):
+    """FFmpeg explicitly reported insufficient CUDA memory."""
 
 
 @dataclass(frozen=True)
@@ -249,6 +256,36 @@ def _pack_nv12(frames, width, height):
 @torch.inference_mode()
 def encode_video(frames, output_path, options=None, audio=None, metadata=None,
                  check_interrupt=None, on_progress=None):
+    """Prepare CUDA headroom, encode, release scratch; retry NVENC OOM once."""
+    options = options or VideoEncodeOptions()
+    validate_options(options)
+    source_count, width, height = get_video_dimensions(frames)
+    validate_audio(audio)
+    if check_interrupt:
+        check_interrupt()
+    chunk_size = options.chunk_size or max(1, min(32, (64 * 1024 * 1024) // (width * height * 3 // 2)))
+    # FP32 RGB, conversion arithmetic, NV12, padding and pingpong selection.
+    conversion_bytes = min(source_count, chunk_size) * width * height * 48
+    budgets = video_memory_requirements(frames.device, options.gpu_device, conversion_bytes)
+    for attempt in range(2):
+        try:
+            with ExitStack() as stack:
+                for device, required in budgets.items():
+                    stack.enter_context(gpu_memory_scope(device, required, force_offload=bool(attempt)))
+                return _encode_video(frames, output_path, options, audio, metadata,
+                                     check_interrupt, on_progress)
+        except NVENCOutOfMemoryError:
+            if attempt:
+                raise
+            if check_interrupt:
+                check_interrupt()
+            logging.warning("mAI GPU Video Combine: NVENC ran out of CUDA memory; retrying once "
+                            "after requesting ComfyUI model offloading, with one-frame conversion chunks.")
+            options = replace(options, chunk_size=1)
+
+
+def _encode_video(frames, output_path, options=None, audio=None, metadata=None,
+                  check_interrupt=None, on_progress=None):
     """Encode one MP4 with NVENC; return encoded frame count and duration.
 
     The fixed FFmpeg child consumes chunked NV12 through stdin. Temporary PCM
@@ -322,7 +359,8 @@ def encode_video(frames, output_path, options=None, audio=None, metadata=None,
                 if process.returncode != 0 or pipe_error is not None:
                     stderr.seek(0)
                     details = stderr.read()[-8000:].decode("utf-8", errors="replace").strip()
-                    raise RuntimeError(f"NVENC video encoding failed ({options.codec}). "
+                    error_type = NVENCOutOfMemoryError if "CUDA_ERROR_OUT_OF_MEMORY" in details else RuntimeError
+                    raise error_type(f"NVENC video encoding failed ({options.codec}). "
                                        "Check the NVIDIA driver, codec support, frame dimensions and available GPU memory.\n"
                                        + (details or str(pipe_error))) from pipe_error
             finally:

@@ -59,9 +59,35 @@ more memory. Full frames stay allocated by ComfyUI. Interrupted execution is
 checked between chunks and while draining the encoder; a blocking pipe write
 must finish or fail before another cancellation check can run.
 
+## CUDA memory lifecycle
+
+Both GPU nodes share `utils/gpu_memory.py`. Before work, garbage collection,
+device synchronization and `torch.cuda.empty_cache()` return unused allocator
+memory to the driver. For encoding, the node requests an estimated 48 bytes per
+pixel per conversion frame and 2 GiB of headroom for FFmpeg's separate CUDA
+context. Only when driver-visible free memory is below the budget does it call
+ComfyUI's `free_memory` hook to offload models on that device. The hook's
+reclaimable-cache accounting is adjusted so that external CUDA context memory
+is not confused with cached PyTorch memory. No ComfyUI core code is changed.
+
+An explicit FFmpeg `CUDA_ERROR_OUT_OF_MEMORY` retries once after the failed
+encoder and temporary files have been cleaned up. The retry requests all
+ComfyUI-managed models on the encoding/conversion devices to be offloaded and
+converts one frame per chunk. Codec/device settings stay the same. Other errors
+and cancellation propagate immediately; a second OOM propagates its diagnostics.
+Cache cleanup runs after success/failure/cancellation. Traceback locations are
+preserved, but inactive worker locals are cleared on errors to release scratch.
+
+Live input tensors, output tensors and allocations belonging to other processes
+cannot be freed this way. Models can reload at later nodes, and synchronization
+and cache clearing add overhead. Budgets are estimates, not guarantees. On
+multiple GPUs, an explicit `gpu_device` is recommended: preparation for `-1`
+targets CUDA device 0 plus the frame device; FFmpeg may choose another capable
+encoder. GPU indices follow the process's CUDA-visible device ordering.
+
 ## Validation
 
-On 2026-10-02, the complete suite with `MAI_TEST_NVENC=1` passed **895 tests**
+On 2026-10-02, the complete suite with `MAI_TEST_NVENC=1` passed **913 tests**
 on Windows, RTX 5090 and PyTorch 2.7.1+cu128. All three NVENC codecs encoded
 successfully. The node pack imported with its new registration, and all existing
 class/display mappings were checked against the previous Git version.
@@ -72,6 +98,9 @@ FP32/FP16/BF16, RGB/RGBA/grayscale, odd padding, clipping, input preservation,
 frame sequence/count, audio timing and interleaving, metadata escaping,
 partial pipe writes, fixed NVENC command construction, optional audio, output
 sockets, native preview descriptors and output/temp selection.
+Memory regression tests cover targeted model offloading, driver-visible cache
+accounting, cleanup on success/failure/cancellation, failed traceback locals,
+CPU/identity bypasses, preserved live CUDA tensors, and the single NVENC OOM retry.
 
 Opt-in integration tests actually encode and decode files using H.264, HEVC
 and AV1 NVENC. They inspect streams with ffprobe, decode pixels with FFmpeg,
