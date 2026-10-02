@@ -5,6 +5,69 @@ ComfyUI custom node pack for small, reusable mAI utility nodes.
 Install this folder under ComfyUI's `custom_nodes` directory, then restart ComfyUI.
 The currently registered nodes are listed below.
 
+## mAI Fast GPU Resize
+
+Location: `mAI / Image`. Registered as `MAIFastGPUResize`.
+
+Resizes a complete ComfyUI `IMAGE` batch using PyTorch tensors. Supports RGB,
+RGBA and other channel counts. Inputs: `image`, `width`, `height`, `resize_mode`,
+`method`, `antialias`, `multiple_of`, `device`, `precision`, and `chunk_size`.
+Outputs in order: `image` (IMAGE), `width` (INT), `height` (INT),
+`method_used` (STRING, including `identity` for a resize bypass).
+
+Defaults: 1280×720, `exact`, `auto` method/device/precision, antialias enabled,
+multiple 1, chunk size 0. Modes: `exact` stretches; `keep_aspect_fit` centers the
+image on a black canvas; `keep_aspect_fill` centers and crops overflow. Odd
+padding/crop differences put the extra pixel on the bottom/right. Dimensions
+round to the nearest `multiple_of` number (INT widget, 1–16384, also connectable
+to an INT output), ties upward, minimum one multiple. Common choices are
+8/16/32/64; 1 disables rounding. For multiple 8: 1023→1024, 1020→1024,
+1019→1016. Any integer in the widget range is supported, such as 3 or 128.
+
+Methods: `nearest`, `nearest-exact`, `bilinear`, `bicubic`, `area`, true
+`lanczos2`/`lanczos3`/`lanczos4`, `mitchell` (B=C=1/3), `catmull_rom`
+(B=0, C=1/2), and `auto`. Auto chooses Lanczos3 if either resize scale ≤0.65,
+Lanczos2 for other shrinking, bicubic up to 1.5×, and Catmull–Rom above that.
+It uses the actual resized image dimensions before padding/cropping.
+Custom kernels use shared separable weights, replicated edges and wider
+low-pass kernels when downsampling with antialias enabled. Native antialias
+applies only to bilinear/bicubic; area always averages and nearest ignores it,
+following [PyTorch's interpolation API](https://docs.pytorch.org/docs/2.7/generated/torch.nn.functional.interpolate.html).
+Lanczos/custom cubic/bicubic results clamp to [0,1] after reconstruction.
+
+`device=auto` preserves the input device, including CPU. Choose `gpu` to move
+a CPU batch to ComfyUI's preferred CUDA device, or `cpu` to explicitly move it
+back. Output stays on the processing device. `precision=auto` preserves input
+dtype; explicit fp32/fp16/bf16 controls output dtype. Custom kernels accumulate
+in FP32 (FP64 for FP64 input); native antialiased reduced precision and CPU
+linear/cubic/area use FP32 internally when needed. Matching-size inputs bypass
+filtering and copying, while honoring explicit device/dtype changes.
+
+`chunk_size=0` processes native methods as a whole batch; custom methods select
+batch chunks from a conservative 512 MiB working-memory estimate. Positive
+values specify the batch chunk size. Tables are built once and reused by every
+chunk. Only chunk and kernel-tap loops are used, never per-frame resizing.
+The node uses no PIL/OpenCV/NumPy path and adds no dependencies.
+
+Limitations: input must be one nonempty BHWC floating-point tensor; IMAGE lists
+are not accepted. Chunking bounds temporary working memory, but the full output
+and input still need memory; it does not offload models or guarantee against OOM.
+Extreme fill aspect ratios or very large single images can need large intermediates.
+Custom kernels are slower than native methods; FP32 accumulation costs memory.
+Alpha is filtered like any other channel, without premultiplication. CUDA is
+required for explicit `gpu`; CPU remains supported. Linux uses the same portable
+torch code, but was not tested on a Linux host.
+
+Test in ComfyUI: restart, search **mAI Fast GPU Resize**, connect an H3/LTX IMAGE
+batch to `image`, set 1024×576 and `device=gpu`, then connect the IMAGE output
+to Preview Image or a video encoder. Check frame order and the width/height/
+method diagnostics. Try 1024×1024 with fit/fill and chunk size 32; save and
+reload the workflow. Automated tests:
+`python -m pytest tests/test_resize_kernels.py tests/test_fast_gpu_resize.py`.
+Benchmark: `python scripts/benchmark_fast_gpu_resize.py --direct` (CUDA), or
+`--device cpu --smoke`. Measurements and architecture details:
+[Fast GPU Resize notes](docs/fast_gpu_resize.md).
+
 ## mAI JSON parser
 
 Location: `mAI / Text`. Registered as `MAIJsonParser`.
