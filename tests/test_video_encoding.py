@@ -1,0 +1,251 @@
+from dataclasses import replace
+import io
+import json
+import os
+import shutil
+import subprocess
+
+import pytest
+import torch
+
+from utils.video_encoding import (
+    CODECS, VideoEncodeOptions, _metadata_text, _pack_nv12, _write_all,
+    _write_audio, build_encode_command, calculate_video_timing,
+    check_nvenc_support, encode_video, get_video_dimensions,
+    playback_frame_count, playback_indices, validate_audio,
+    validate_filename_prefix, validate_options,
+)
+
+
+@pytest.mark.parametrize("count,pingpong,loops,expected", [(1,True,2,3),(2,True,0,2),(4,False,1,8),(4,True,0,6),(4,True,2,18)])
+def test_playback_count(count,pingpong,loops,expected):
+    assert playback_frame_count(count,pingpong,loops) == expected
+
+
+def test_pingpong_sequence_has_no_duplicated_endpoints_and_chunks_match():
+    expected = [0,1,2,3,2,1,0,1,2,3,2,1]
+    assert playback_indices(0,12,4,True).tolist() == expected
+    parts = torch.cat([playback_indices(0,5,4,True),playback_indices(5,9,4,True),playback_indices(9,12,4,True)])
+    assert parts.tolist() == expected
+    assert playback_indices(0,8,4,False).tolist() == [0,1,2,3,0,1,2,3]
+
+
+@pytest.mark.parametrize("channels", [1,3,4])
+@pytest.mark.parametrize("dtype", [torch.float32,torch.float16,torch.bfloat16])
+def test_chunk_packing_channels_quantization_padding_and_input_preservation(channels,dtype):
+    frames = torch.full((2,3,5,channels),0.5,dtype=dtype)
+    before = frames.clone()
+    n,w,h = get_video_dimensions(frames)
+    packed = _pack_nv12(frames,w,h)
+    assert (n,w,h) == (2,6,4)
+    assert packed.shape == (2,36) and packed.dtype == torch.uint8
+    y = packed[:,:24].reshape(2,4,6)
+    assert y[:,:3,:5].eq(126).all()
+    assert y[:,3].eq(16).all() and y[:,:,5].eq(16).all()
+    assert packed[:,24:].eq(128).all()
+    torch.testing.assert_close(frames,before)
+
+
+@pytest.mark.parametrize("frames", [None,torch.zeros(0,4,4,3),torch.zeros(1,4,0,3),torch.zeros(4,4,3),torch.zeros(1,4,4,2),torch.zeros(1,4,4,3,dtype=torch.uint8)])
+def test_invalid_frames(frames):
+    with pytest.raises(ValueError):
+        get_video_dimensions(frames)
+
+
+def test_nonfinite_frames_rejected_and_out_of_range_pixels_clipped():
+    with pytest.raises(ValueError,match="non-finite"):
+        _pack_nv12(torch.full((1,4,4,3),float("nan")),4,4)
+    image = torch.tensor([-1.0,0.5,2.0]).view(1,1,1,3)
+    torch.testing.assert_close(_pack_nv12(image,2,2),_pack_nv12(image.clamp(0,1),2,2))
+
+
+@pytest.mark.parametrize("color,yuv", [
+    ((0,0,0),(16,128,128)), ((1,1,1),(235,128,128)),
+    ((1,0,0),(63,102,240)), ((0,1,0),(173,42,26)),
+    ((0,0,1),(32,240,118)), ((0.5,0.5,0.5),(126,128,128)),
+])
+def test_bt709_limited_range_reference_colors(color,yuv):
+    image = torch.tensor(color,dtype=torch.float32).view(1,1,1,3).expand(1,2,2,3)
+    packed = _pack_nv12(image,2,2)[0]
+    assert packed[:4].eq(yuv[0]).all()
+    assert packed[4:].tolist() == list(yuv[1:])
+
+
+@pytest.mark.parametrize("prefix", ["video/mAI","mAI","nested\\video","frames_%width%x%height%"])
+def test_relative_prefixes(prefix):
+    assert validate_filename_prefix(prefix) == prefix.replace("\\","/")
+
+
+@pytest.mark.parametrize("prefix", [""," ",None,"../video","sub/../../video","/tmp/video","C:\\video","C:video","\\\\server\\video","folder/","video\nname","video?name"])
+def test_unsafe_prefixes(prefix):
+    with pytest.raises(ValueError):
+        validate_filename_prefix(prefix)
+
+
+@pytest.mark.parametrize("changes", [{"frame_rate":0},{"frame_rate":float("nan")},{"frame_rate":True},{"frame_rate":1001},{"codec":"libx264"},{"preset":"slow"},{"quality":-1},{"quality":52},{"gpu_device":-2},{"chunk_size":-1},{"loop_count":101},{"loop_count":0.5},{"pingpong":1},{"trim_to_audio":"false"}])
+def test_invalid_options(changes):
+    with pytest.raises(ValueError):
+        validate_options(replace(VideoEncodeOptions(),**changes))
+
+
+@pytest.mark.parametrize("audio", [{},{"waveform":torch.zeros(2,1,100),"sample_rate":48000},{"waveform":torch.zeros(1,0,100),"sample_rate":48000},{"waveform":torch.zeros(1,1,0),"sample_rate":48000},{"waveform":torch.zeros(1,1,100),"sample_rate":0}])
+def test_invalid_audio(audio):
+    with pytest.raises(ValueError):
+        validate_audio(audio)
+
+
+def test_audio_timing_and_pcm_interleave(tmp_path):
+    waveform = torch.tensor([[[0.1,0.2,0.3,0.4],[0.5,0.6,0.7,0.8]]])
+    info = validate_audio({"waveform":waveform,"sample_rate":10})
+    assert validate_audio(None) is None
+    options = VideoEncodeOptions(frame_rate=10,pingpong=True,loop_count=1)
+    assert calculate_video_timing(5,options,info) == (16,1.6)
+    assert calculate_video_timing(5,replace(options,trim_to_audio=True),info) == (4,0.4)
+    path = tmp_path/"audio.raw"
+    _write_audio(path,info,0.2,None)
+    data = torch.frombuffer(bytearray(path.read_bytes()),dtype=torch.float32)
+    torch.testing.assert_close(data,torch.tensor([0.1,0.5,0.2,0.6]))
+    assert waveform[0,0,-1] == 0.4
+
+
+@pytest.mark.parametrize("codec", CODECS)
+def test_command_uses_nvenc_and_fixed_argument_list(codec):
+    options = VideoEncodeOptions(codec=codec,frame_rate=23.976,quality=19,preset="p6")
+    info = (torch.zeros(1,2,48000),48000)
+    command = build_encode_command("ffmpeg","some video.mp4",1920,1080,121,options,
+                                   "audio.raw",info,"workflow.ffmeta")
+    assert command[command.index("-c:v")+1] == codec
+    assert command[command.index("-pixel_format")+1] == "nv12"
+    assert command[command.index("-map_metadata")+1] == "2"
+    assert command[command.index("-cq")+1] == "19"
+    assert command[-1] == "some video.mp4"
+    assert "-hwaccel" not in command and "-vf" not in command
+    assert "-c:a" in command and "apad" in command
+    silent = build_encode_command("ffmpeg","video.mp4",320,240,1,options)
+    assert "-an" in silent and "-c:a" not in silent
+    assert silent[silent.index("-map_metadata")+1] == "-1"
+
+
+def test_metadata_is_in_a_file_and_escapes_reserved_characters():
+    text = _metadata_text({"workflow":{"label":"equals=hash#semi;slash\\ newline\n"},"prompt":{"1":{}},"ignored":"no"})
+    assert text.startswith(";FFMETADATA1\n")
+    assert "workflow=" in text and "prompt=" in text and "ignored" not in text
+    assert "\\=" in text and "\\#" in text and "\\;" in text
+
+
+def test_partial_writes_are_completed():
+    class PartialWriter(io.BytesIO):
+        def write(self,data):
+            return super().write(data[:3])
+    stream = PartialWriter()
+    _write_all(stream,b"1234567890")
+    assert stream.getvalue() == b"1234567890"
+
+
+def test_existing_output_is_preserved(tmp_path):
+    output = tmp_path/"existing.mp4"
+    output.write_bytes(b"keep")
+    with pytest.raises(FileExistsError):
+        encode_video(torch.zeros(1,240,320,3),output)
+    assert output.read_bytes() == b"keep"
+
+
+def test_missing_nvenc_is_clear(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(subprocess,"run",lambda *a,**k:SimpleNamespace(returncode=0,stdout="",stderr="Codec not found"))
+    with pytest.raises(RuntimeError,match="no CPU fallback"):
+        check_nvenc_support("ffmpeg","h264_nvenc")
+
+
+NVENC_TESTS = os.environ.get("MAI_TEST_NVENC") == "1" and shutil.which("ffmpeg") and shutil.which("ffprobe")
+nvenc = pytest.mark.skipif(not NVENC_TESTS,reason="Set MAI_TEST_NVENC=1 with FFmpeg/ffprobe and an NVENC-capable GPU")
+
+
+def _probe(path):
+    result = subprocess.run([shutil.which("ffprobe"),"-v","error","-show_streams","-show_format","-of","json",str(path)],capture_output=True,text=True,encoding="utf-8",check=True)
+    return json.loads(result.stdout)
+
+
+def _decode(path,width,height):
+    result = subprocess.run([shutil.which("ffmpeg"),"-v","error","-i",str(path),"-f","rawvideo","-pix_fmt","rgb24","pipe:1"],capture_output=True,check=True)
+    return torch.frombuffer(bytearray(result.stdout),dtype=torch.uint8).reshape(-1,height,width,3).float()/255
+
+
+@nvenc
+@pytest.mark.parametrize("codec", CODECS)
+def test_real_nvenc_audio_metadata_dimensions_and_order(tmp_path,codec):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    frames = torch.zeros(7,241,321,3,device=device)
+    frames[:3,...,0] = 1
+    frames[3:,...,2] = 1
+    before = frames.clone()
+    audio = {"waveform":torch.sin(torch.arange(4800,device=device)*0.0576)[None,None,:]*0.2,"sample_rate":48000}
+    output = tmp_path/f"{codec}.mp4"
+    metadata = {"workflow":{"text":"a=b;#slash\\\n雪","large":"x"*40000},"prompt":{"1":{}}}
+    count,duration = encode_video(frames,output,VideoEncodeOptions(codec=codec,chunk_size=3),audio,metadata)
+    assert count == 7 and duration == 7/24
+    info = _probe(output)
+    video = next(s for s in info["streams"] if s["codec_type"] == "video")
+    sound = next(s for s in info["streams"] if s["codec_type"] == "audio")
+    assert video["codec_name"] == {"h264_nvenc":"h264","hevc_nvenc":"hevc","av1_nvenc":"av1"}[codec]
+    assert (video["width"],video["height"],int(video["nb_frames"])) == (322,242,7)
+    assert video["pix_fmt"] == "yuv420p"
+    assert video["color_space"] == "bt709" and video["color_range"] == "tv"
+    assert sound["codec_name"] == "aac" and sound["channels"] == 1
+    assert abs(float(sound["duration"])-duration) < 0.05
+    assert json.loads(info["format"]["tags"]["workflow"]) == metadata["workflow"]
+    assert json.loads(info["format"]["tags"]["prompt"]) == metadata["prompt"]
+    decoded = _decode(output,322,242)
+    assert decoded.shape[0] == 7
+    assert decoded[0,:238,:318,0].mean() > 0.96
+    assert decoded[-1,:238,:318,2].mean() > 0.96
+    torch.testing.assert_close(frames,before)
+    assert not list(tmp_path.glob(".mai_video_*"))
+
+
+@nvenc
+def test_real_pingpong_repeats_silent_video_and_121_frame_batch(tmp_path):
+    frames = torch.linspace(0,1,6)[:,None,None,None].expand(6,240,320,3)
+    output = tmp_path/"pingpong.mp4"
+    count,duration = encode_video(frames,output,VideoEncodeOptions(pingpong=True,loop_count=1,chunk_size=3))
+    assert (count,duration) == (20,20/24)
+    decoded = _decode(output,320,240)
+    expected = torch.tensor([0,.2,.4,.6,.8,1,.8,.6,.4,.2]*2)
+    torch.testing.assert_close(decoded.mean((1,2,3)),expected,atol=0.03,rtol=0)
+    assert len(_probe(output)["streams"]) == 1
+    batch = torch.linspace(0,1,121)[:,None,None,None].expand(121,240,320,3)
+    path = tmp_path/"121.mp4"
+    assert encode_video(batch,path)[0] == 121
+    video = _probe(path)["streams"][0]
+    assert int(video["nb_frames"]) == 121
+    decoded = _decode(path,320,240)
+    assert decoded[0].mean() < 0.02 and decoded[-1].mean() > 0.97
+
+
+@nvenc
+@pytest.mark.parametrize("audio_samples,trim,expected", [(7200,False,24),(7200,True,4),(96000,False,24)])
+def test_real_audio_padding_trimming_and_duration(tmp_path,audio_samples,trim,expected):
+    audio = {"waveform":torch.zeros(1,2,audio_samples),"sample_rate":48000}
+    output = tmp_path/"timing.mp4"
+    count,duration = encode_video(torch.zeros(24,240,320,3),output,
+                                   VideoEncodeOptions(trim_to_audio=trim),audio)
+    assert count == expected
+    info = _probe(output)
+    sound = next(s for s in info["streams"] if s["codec_type"] == "audio")
+    assert sound["channels"] == 2 and abs(float(sound["duration"])-duration) < 0.05
+
+
+@nvenc
+def test_real_failure_and_interrupt_cleanup(tmp_path):
+    destination = tmp_path/"failed.mp4"
+    with pytest.raises(RuntimeError,match="NVENC video encoding failed"):
+        encode_video(torch.zeros(2,240,320,3),destination,VideoEncodeOptions(gpu_device=128))
+    assert not destination.exists() and not list(tmp_path.glob(".mai_video_*"))
+    frames = torch.zeros(16,240,320,3)
+    def interrupt():
+        raise InterruptedError("cancelled")
+    def progress(current,total):
+        interrupt()
+    with pytest.raises(InterruptedError,match="cancelled"):
+        encode_video(frames,destination,VideoEncodeOptions(chunk_size=2),on_progress=progress)
+    assert not destination.exists() and not list(tmp_path.glob(".mai_video_*"))

@@ -5,6 +5,89 @@ ComfyUI custom node pack for small, reusable mAI utility nodes.
 Install this folder under ComfyUI's `custom_nodes` directory, then restart ComfyUI.
 The currently registered nodes are listed below.
 
+## mAI GPU Video Combine
+
+Location: `mAI / IO`. Registered as `MAIGPUVideoCombine`.
+
+Combines an IMAGE frame batch with optional ComfyUI AUDIO into an MP4 using
+NVIDIA NVENC. The basic frame/audio, saving and playback controls are inspired
+by [VideoHelperSuite's Video Combine](https://github.com/kosinkadink/ComfyUI-VideoHelperSuite#video-combine);
+this node is implemented independently and does not require VHS.
+
+Inputs: `frames` (IMAGE), optional `audio` (AUDIO), `frame_rate`,
+`filename_prefix`, `codec`, `quality`, `preset`, `pingpong`, `loop_count`,
+`trim_to_audio`, `save_output`, `save_metadata`, `gpu_device`, and `chunk_size`.
+Defaults: 24 FPS, prefix `video/mAI`, `h264_nvenc`, quality 23, preset p4,
+no ping-pong/repeats, full video duration, save to output with workflow metadata,
+GPU -1 (first available), automatic chunks. Connect the loader's `fps` output
+to `frame_rate` to preserve playback speed.
+
+Outputs, in order:
+
+* `filenames` (VHS_FILENAMES): `(save_output, [absolute_video_path])`, compatible
+  with VHS filename consumers when VHS is installed.
+* `file_path` (STRING): the completed MP4's absolute path.
+* `frame_count` (INT): encoded frames, including repeats/ping-pong or audio trim.
+* `duration` (FLOAT): encoded frame count divided by FPS, in seconds.
+
+The node saves the video and returns ComfyUI's native animated/video preview.
+`save_output=false` writes a preview file in ComfyUI's temp directory instead.
+Filename prefixes support subfolders and ComfyUI's standard `%width%`, `%height%`,
+`%year%`, `%month%`, `%day%`, `%hour%`, `%minute%`, `%second%` placeholders.
+Unique suffixes prevent concurrent runs from overwriting videos. MP4 workflow
+and prompt tags are embedded when supplied; global `--disable-metadata` is honored.
+
+`codec` offers H.264, HEVC and AV1 NVENC. `quality` is constant-quality VBR CQ
+(0–51, lower gives higher quality/larger files), rather than software CRF.
+Presets p1–p7 range from fastest to best quality; p4 is the default balance.
+H.264 MP4 is the most broadly usable preview choice. HEVC/AV1 playback depends
+on the browser/player. `gpu_device` is FFmpeg's NVENC GPU index, not a torch
+device selector; -1 chooses an available encoder device.
+
+Frames are clipped to [0,1] and converted to 8-bit, limited-range BT.709 NV12
+in tensor chunks on their existing device (CUDA for GPU frames). NVENC performs
+video compression on the GPU. FFmpeg stdin requires a CPU byte buffer, so CUDA frames transfer
+to CPU and FFmpeg uploads them to its encoder. Audio PCM, AAC encoding and
+muxing use CPU. This is GPU-accelerated encoding, with a CPU bridge rather than
+a direct torch-to-NVENC CUDA surface connection. No PNG/PIL/OpenCV path or
+per-frame Python conversion loop is used. NumPy is only a zero-copy CPU byte
+view of torch data; no new Python dependencies were added.
+
+`chunk_size=0` chooses at most 32 frames and approximately 64 MiB of packed
+NV12 pixels per chunk (at least one frame). Positive values specify frames per chunk.
+Input is not modified, and frame order is preserved. Odd width/height gain one
+black column/row at the right/bottom for even 4:2:0 dimensions; no resizing occurs.
+One-channel input expands to RGB; RGBA alpha is discarded. Outputs are SDR 8-bit
+4:2:0; this is not an HDR, alpha-video or lossless export node.
+
+Missing audio produces a silent video. Audio must have waveform shape
+`[1, channels, samples]` and an integer sample rate. Long audio is trimmed to the
+video; short audio is padded with silence. `trim_to_audio=true` shortens the
+video to the frame containing the audio endpoint. `pingpong` appends reversed
+interior frames without duplicating endpoints. `loop_count` means additional
+encoded video repetitions. Audio plays once, then pads with silence; it does
+not repeat or reverse with the frames.
+
+Requires an NVENC-capable NVIDIA GPU/driver and FFmpeg with the chosen NVENC
+encoder and NV12 support. FFmpeg is discovered on PATH, with an existing
+`imageio_ffmpeg` installation as a fallback. CPU-only installations can import
+the node, but encoding requires NVENC; unavailable codecs/drivers produce a
+clear error without silent software fallback. GPU dimension limits still apply,
+especially to tiny images or very large resolutions. The full input batch remains
+in memory; chunking bounds conversion buffers rather than model VRAM.
+
+Test in ComfyUI: restart, search **mAI GPU Video Combine**, connect `frames`,
+`audio` and `fps` from **mAI video loader** (or frames from **mAI Fast GPU Resize**),
+then queue. Check the video preview, sound, first/last frame, and saved MP4 in
+`output/video`. Disconnect audio to check silent output; try ping-pong/repeats
+and `trim_to_audio`. Save/reload the workflow. There are no GIF/WebP/custom VHS
+format presets, latent decoding or VHS meta-batch inputs in this initial version.
+
+Tests: `python -m pytest tests/test_video_encoding.py tests/test_gpu_video_combine.py`.
+Real NVENC tests are opt-in: set `MAI_TEST_NVENC=1` and run those tests with
+FFmpeg/ffprobe on PATH. Detailed validation and implementation notes:
+[GPU Video Combine](docs/gpu_video_combine.md).
+
 ## mAI Fast GPU Resize
 
 Location: `mAI / Image`. Registered as `MAIFastGPUResize`.

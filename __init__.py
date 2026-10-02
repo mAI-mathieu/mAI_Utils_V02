@@ -4,6 +4,7 @@ from .nodes.composite_layer_node import MAICompositeLayer
 from .nodes.conditional_lora import MAIConditionalLora
 from .nodes.example_text_node import MAIExampleTextNode
 from .nodes.fast_gpu_resize import MAIFastGPUResize
+from .nodes.gpu_video_combine import MAIGPUVideoCombine
 from .nodes.h3_to_ltx_frame_adapter import MAIH3ToLTXFrameAdapter
 from .nodes.image_aspect_ratio import MAIImageAspectRatio
 from .nodes.image_gate import MAIImageGate
@@ -44,6 +45,7 @@ NODE_CLASS_MAPPINGS = {
     "MAIConditionalLora": MAIConditionalLora,
     "MAIExampleTextNode": MAIExampleTextNode,
     "MAIFastGPUResize": MAIFastGPUResize,
+    "MAIGPUVideoCombine": MAIGPUVideoCombine,
     "MAIH3ToLTXFrameAdapter": MAIH3ToLTXFrameAdapter,
     "MAIImageAspectRatio": MAIImageAspectRatio,
     "MAIImageGate": MAIImageGate,
@@ -67,6 +69,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MAIConditionalLora": "mAI conditional LoRA",
     "MAIExampleTextNode": "mAI Example Text Node",
     "MAIFastGPUResize": "mAI Fast GPU Resize",
+    "MAIGPUVideoCombine": "mAI GPU Video Combine",
     "MAIH3ToLTXFrameAdapter": "mAI H3 to LTX Frame Adapter",
     "MAIImageAspectRatio": "mAI image aspect ratio",
     "MAIImageGate": "mAI image gate",
