@@ -5,6 +5,34 @@ ComfyUI custom node pack for small, reusable mAI utility nodes.
 Install this folder under ComfyUI's `custom_nodes` directory, then restart ComfyUI.
 The currently registered nodes are listed below.
 
+## mAI Image Logic Check
+
+Location: `mAI / Logic`. Registered as `MAIImageLogicCheck`.
+
+Compares an IMAGE batch property with a number for conditional workflow branching.
+Required inputs: `image` (`IMAGE`), `property` (`Megapixels`, `Width`, `Height`,
+`Aspect Ratio`, or `Batch Size`), `operator` (`>`, `>=`, `<`, `<=`, `==`, or `!=`),
+and `compare_value` (`FLOAT`, default `2.2`, range `0`–`1e15`, step `0.01`).
+Outputs, in order: `result` (`BOOLEAN`) and `actual_value` (`FLOAT`).
+
+Defaults to `Megapixels > 2.2`. For a `[B, H, W, C]` batch, megapixels are
+`W * H / 1_000_000.0` per image, width and height are pixel counts, aspect ratio
+is `W / H`, and batch size is `B`. A 1024 × 1024 image returns
+`False` and `1.048576` with the defaults. Equality uses `math.isclose` with
+relative and absolute tolerances of `1e-6`; `!=` inverts that check.
+
+Reads only tensor shape: input pixels are never modified, copied, or moved
+between CPU and GPU. Requires a non-empty four-dimensional IMAGE batch; reports
+one result for the entire batch using its shared dimensions. The boolean can
+connect to conditional/lazy nodes, whose execution behavior determines branching.
+This node must evaluate its input image before it can measure its shape.
+
+Test in ComfyUI: restart, search for **mAI Image Logic Check**, connect a
+1024 × 1024 IMAGE, and display `actual_value` or connect `result` to a BOOLEAN
+input on a conditional node. Check the default result above, then change the
+operator to `<` and expect `True`. Try `Batch Size` with a multi-image batch.
+Automated tests: `python -m pytest tests/test_image_logic_check.py`.
+
 ## mAI GPU Video Combine
 
 Location: `mAI / IO`. Registered as `MAIGPUVideoCombine`.

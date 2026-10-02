@@ -8,6 +8,7 @@ from .nodes.gpu_video_combine import MAIGPUVideoCombine
 from .nodes.h3_to_ltx_frame_adapter import MAIH3ToLTXFrameAdapter
 from .nodes.image_aspect_ratio import MAIImageAspectRatio
 from .nodes.image_gate import MAIImageGate
+from .nodes.image_logic_check import MAIImageLogicCheck
 from .nodes.json_parser import MAIJsonParser
 from .nodes.krea2_image_conditioning import MAIKrea2ImageConditioning
 from .nodes.mask_bounding_box import MAIMaskBoundingBox
@@ -49,6 +50,7 @@ NODE_CLASS_MAPPINGS = {
     "MAIH3ToLTXFrameAdapter": MAIH3ToLTXFrameAdapter,
     "MAIImageAspectRatio": MAIImageAspectRatio,
     "MAIImageGate": MAIImageGate,
+    "MAIImageLogicCheck": MAIImageLogicCheck,
     "MAIJsonParser": MAIJsonParser,
     "MAIKrea2ImageConditioning": MAIKrea2ImageConditioning,
     "MAIMaskBoundingBox": MAIMaskBoundingBox,
@@ -73,6 +75,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MAIH3ToLTXFrameAdapter": "mAI H3 to LTX Frame Adapter",
     "MAIImageAspectRatio": "mAI image aspect ratio",
     "MAIImageGate": "mAI image gate",
+    "MAIImageLogicCheck": "mAI Image Logic Check",
     "MAIJsonParser": "mAI JSON parser",
     "MAIKrea2ImageConditioning": "mAI Krea2 image conditioning",
     "MAIMaskBoundingBox": "mAI mask bounding box",
