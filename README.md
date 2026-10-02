@@ -422,6 +422,39 @@ Preview Image or a video encoder. Try all three modes with amount 2 and check
 the retained first/last frames and `frame_count`. Also try an IMAGE list source.
 Automated tests: `python -m pytest tests/test_frame_sequence.py tests/test_trim_frame_sequence.py`.
 
+## mAI H3 to LTX Frame Adapter
+
+Location: `mAI / Image`. Registered as `MAIH3ToLTXFrameAdapter`.
+
+Prepares an H3 frame sequence for LTX 2.5 refinement by selecting the largest
+frame count `1 + 8 * ((N - 1) // 8)` no greater than the source count. Input:
+`images` (`IMAGE`). Outputs, in order: `images` (`IMAGE` batch), `source_frames`,
+`target_frames`, and `removed_frames` (all `INT`). No widgets or optional inputs.
+
+For example, 124 frames become 121, 107 become 105, and 90 become 89. The first
+and last source frames are preserved exactly; intermediate removals are spread
+evenly using rounded indices across the full sequence. Compatible tensor batches
+(such as 73 or 209 frames) return unchanged, without copying. No interpolation,
+resizing, color processing, dtype conversion, or device transfer occurs. One
+concise console message reports conversion or an already-compatible count.
+
+Ordered lists of HWC or one-frame BHWC tensors are also supported and returned
+as one ComfyUI IMAGE batch. The selection helper preserves the original list
+elements; assembling the output batch allocates memory. List frames must share
+dimensions, channels, dtype, and device. Multi-frame batches within a list are
+not supported. Empty inputs and sequences shorter than 9 frames raise clear
+errors. The node accepts any count of at least 9, without enforcing H3's count
+rule. It handles images only: audio, FPS, and timestamps are not adjusted.
+At an unchanged playback FPS, fewer frames mean a slightly shorter duration,
+although the selected frames cover the complete source temporal span.
+
+Test in ComfyUI: restart, search for **mAI H3 to LTX Frame Adapter**, connect the
+H3 IMAGE batch to `images`, and send the output to the LTX refinement image input.
+With 124 source frames, check diagnostics `124 / 121 / 3` and preview the first
+and last frames against the source. A compatible 121-frame batch should report
+`121 / 121 / 0`. Automated tests:
+`python -m pytest tests/test_h3_to_ltx_frame_adapter.py`.
+
 ## mAI Inpaint Crop - Separate Stitch Mask
 
 Location:

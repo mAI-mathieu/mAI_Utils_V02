@@ -3,6 +3,7 @@ from .nodes.cinematic_post import mAI_CinematicPost
 from .nodes.composite_layer_node import MAICompositeLayer
 from .nodes.conditional_lora import MAIConditionalLora
 from .nodes.example_text_node import MAIExampleTextNode
+from .nodes.h3_to_ltx_frame_adapter import MAIH3ToLTXFrameAdapter
 from .nodes.image_aspect_ratio import MAIImageAspectRatio
 from .nodes.image_gate import MAIImageGate
 from .nodes.json_parser import MAIJsonParser
@@ -41,6 +42,7 @@ NODE_CLASS_MAPPINGS = {
     "MAICompositeLayer": MAICompositeLayer,
     "MAIConditionalLora": MAIConditionalLora,
     "MAIExampleTextNode": MAIExampleTextNode,
+    "MAIH3ToLTXFrameAdapter": MAIH3ToLTXFrameAdapter,
     "MAIImageAspectRatio": MAIImageAspectRatio,
     "MAIImageGate": MAIImageGate,
     "MAIJsonParser": MAIJsonParser,
@@ -62,6 +64,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MAICompositeLayer": "mAI Composite Layer",
     "MAIConditionalLora": "mAI conditional LoRA",
     "MAIExampleTextNode": "mAI Example Text Node",
+    "MAIH3ToLTXFrameAdapter": "mAI H3 to LTX Frame Adapter",
     "MAIImageAspectRatio": "mAI image aspect ratio",
     "MAIImageGate": "mAI image gate",
     "MAIJsonParser": "mAI JSON parser",
