@@ -4,3 +4,5 @@
 
 Pillow>=10.0.0
 numpy>=1.24.0
+# Bundled FFmpeg fallback for cloud images without a system executable.
+imageio-ffmpeg>=0.6.0

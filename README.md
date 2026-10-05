@@ -38,7 +38,7 @@ Automated tests: `python -m pytest tests/test_image_logic_check.py`.
 Location: `mAI / IO`. Registered as `MAIGPUVideoCombine`.
 
 Combines an IMAGE frame batch with optional ComfyUI AUDIO into an MP4 using
-NVIDIA NVENC. The basic frame/audio, saving and playback controls are inspired
+NVIDIA NVENC or a selected software encoder. The basic frame/audio, saving and playback controls are inspired
 by [VideoHelperSuite's Video Combine](https://github.com/kosinkadink/ComfyUI-VideoHelperSuite#video-combine);
 this node is implemented independently and does not require VHS.
 
@@ -65,21 +65,25 @@ Filename prefixes support subfolders and ComfyUI's standard `%width%`, `%height%
 Unique suffixes prevent concurrent runs from overwriting videos. MP4 workflow
 and prompt tags are embedded when supplied; global `--disable-metadata` is honored.
 
-`codec` offers H.264, HEVC and AV1 NVENC. `quality` is constant-quality VBR CQ
-(0–51, lower gives higher quality/larger files), rather than software CRF.
-Presets p1–p7 range from fastest to best quality; p4 is the default balance.
+`codec` offers H.264, HEVC and AV1 NVENC, plus `libx264` (H.264), `libx265`
+(HEVC) and `libsvtav1` (AV1) software encoding. `quality` is NVENC VBR CQ or
+software CRF (0–51, lower gives higher quality/larger files). Values are not
+equivalent between encoders. Presets p1–p7 range from fastest to slowest;
+p4 is the default balance. Software H.264/HEVC map to ultrafast, superfast,
+veryfast, medium, slow, slower, veryslow; software AV1 maps to 12, 10, 8, 6, 5, 4, 3.
 H.264 MP4 is the most broadly usable preview choice. HEVC/AV1 playback depends
 on the browser/player. `gpu_device` is FFmpeg's NVENC GPU index, not a torch
-device selector; -1 chooses an available encoder device.
+device selector; -1 chooses an available encoder device. Software codecs ignore it.
 
 Frames are clipped to [0,1] and converted to 8-bit, limited-range BT.709 NV12
 in tensor chunks on their existing device (CUDA for GPU frames). NVENC performs
-video compression on the GPU. FFmpeg stdin requires a CPU byte buffer, so CUDA frames transfer
+video compression on the GPU; software codecs compress on CPU and deinterleave
+NV12 to planar YUV420P. FFmpeg stdin requires a CPU byte buffer, so CUDA frames transfer
 to CPU and FFmpeg uploads them to its encoder. Audio PCM, AAC encoding and
 muxing use CPU. This is GPU-accelerated encoding, with a CPU bridge rather than
-a direct torch-to-NVENC CUDA surface connection. No PNG/PIL/OpenCV path or
+a direct torch-to-NVENC CUDA surface connection when using NVENC. No PNG/PIL/OpenCV path or
 per-frame Python conversion loop is used. NumPy is only a zero-copy CPU byte
-view of torch data; no new Python dependencies were added.
+view of torch data. `imageio-ffmpeg` provides a bundled FFmpeg fallback when installed.
 
 `chunk_size=0` chooses at most 32 frames and approximately 64 MiB of packed
 NV12 pixels per chunk (at least one frame). Positive values specify frames per chunk.
@@ -96,11 +100,12 @@ interior frames without duplicating endpoints. `loop_count` means additional
 encoded video repetitions. Audio plays once, then pads with silence; it does
 not repeat or reverse with the frames.
 
-Requires an NVENC-capable NVIDIA GPU/driver and FFmpeg with the chosen NVENC
-encoder and NV12 support. FFmpeg is discovered on PATH, with an existing
-`imageio_ffmpeg` installation as a fallback. CPU-only installations can import
-the node, but encoding requires NVENC; unavailable codecs/drivers produce a
-clear error without silent software fallback. GPU dimension limits still apply,
+Requires FFmpeg with the chosen encoder. Discovery order: `MAI_FFMPEG_EXE`,
+`IMAGEIO_FFMPEG_EXE`, PATH, then the `imageio-ffmpeg` package installed by this
+pack's requirements. Overrides must identify an executable, without command
+arguments. NVENC additionally requires an NVENC-capable NVIDIA GPU/driver;
+unavailable codecs/drivers produce a clear error without automatic software
+fallback. Software codecs work with CPU or GPU input tensors. GPU dimension limits still apply,
 especially to tiny images or very large resolutions. The full input batch remains
 in memory; chunking bounds conversion buffers. Before encoding, unused CUDA
 cache is released and ComfyUI is asked to offload models if free VRAM is below
@@ -110,8 +115,31 @@ An explicit FFmpeg `CUDA_ERROR_OUT_OF_MEMORY` triggers one retry after requestin
 model offloading on the affected GPUs, with one-frame conversion chunks.
 Models may reload later in the workflow. This cannot free live frame tensors or
 memory owned by other processes and does not guarantee against OOM.
-With multiple GPUs, set `gpu_device` explicitly: automatic NVENC preparation
+Software encoding reserves only tensor conversion memory, with no NVENC context
+headroom or NVENC retry. With multiple GPUs, set `gpu_device` explicitly: automatic NVENC preparation
 targets the first visible CUDA GPU, while FFmpeg can select another capable GPU.
+
+### Modal and Runpod
+
+**RTX PRO 6000 Blackwell:** use NVENC when FFmpeg and the container's NVIDIA
+video driver libraries are available. **B200/B300:** select `libx264` (recommended
+for previews), `libx265`, or `libsvtav1`; these GPUs have no NVENC engines.
+They can run CUDA frame conversion, but video compression uses CPU.
+See [NVIDIA's support matrix](https://developer.nvidia.com/video-encode-decode-support-matrix).
+
+For the reported `FFmpeg was not found` error, install this pack's updated
+`requirements.txt` using the same Python environment that runs ComfyUI, then
+restart. For Debian/Ubuntu Runpod containers you can also install system FFmpeg:
+
+```bash
+apt-get update && apt-get install -y ffmpeg
+```
+
+For Modal, extend your existing ComfyUI image with `.apt_install("ffmpeg")`
+and rebuild/redeploy. See the [cloud setup and runtime verification](docs/gpu_video_combine.md#cloud-setup-modal-and-runpod)
+for driver library requirements and a real encoding check. A bundled FFmpeg
+does not supply NVIDIA host drivers or guarantee every encoder on every platform;
+software AV1 requires a build with `libsvtav1` (absent in the tested Windows wheel).
 
 Test in ComfyUI: restart, search **mAI GPU Video Combine**, connect `frames`,
 `audio` and `fps` from **mAI video loader** (or frames from **mAI Fast GPU Resize**),
@@ -122,7 +150,8 @@ format presets, latent decoding or VHS meta-batch inputs in this initial version
 
 Tests: `python -m pytest tests/test_video_encoding.py tests/test_gpu_video_combine.py`.
 Real NVENC tests are opt-in: set `MAI_TEST_NVENC=1` and run those tests with
-FFmpeg/ffprobe on PATH. Detailed validation and implementation notes:
+FFmpeg/ffprobe on PATH. Software integration tests use `MAI_TEST_FFMPEG=1`.
+Detailed validation and implementation notes:
 [GPU Video Combine](docs/gpu_video_combine.md).
 
 ## mAI Fast GPU Resize

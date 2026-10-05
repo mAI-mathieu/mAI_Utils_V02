@@ -4,14 +4,16 @@ import json
 import os
 import shutil
 import subprocess
+import sys
+from types import ModuleType, SimpleNamespace
 
 import pytest
 import torch
 
 from utils.video_encoding import (
-    CODECS, VideoEncodeOptions, _metadata_text, _pack_nv12, _write_all,
+    NVENC_CODECS, SOFTWARE_CODECS, VideoEncodeOptions, _metadata_text, _pack_nv12, _write_all,
     _write_audio, build_encode_command, calculate_video_timing,
-    check_nvenc_support, encode_video, get_video_dimensions,
+    check_nvenc_support, check_software_support, encode_video, find_ffmpeg, get_video_dimensions,
     playback_frame_count, playback_indices, validate_audio,
     validate_filename_prefix, validate_options,
 )
@@ -82,7 +84,7 @@ def test_unsafe_prefixes(prefix):
         validate_filename_prefix(prefix)
 
 
-@pytest.mark.parametrize("changes", [{"frame_rate":0},{"frame_rate":float("nan")},{"frame_rate":True},{"frame_rate":1001},{"codec":"libx264"},{"preset":"slow"},{"quality":-1},{"quality":52},{"gpu_device":-2},{"chunk_size":-1},{"loop_count":101},{"loop_count":0.5},{"pingpong":1},{"trim_to_audio":"false"}])
+@pytest.mark.parametrize("changes", [{"frame_rate":0},{"frame_rate":float("nan")},{"frame_rate":True},{"frame_rate":1001},{"codec":"unknown"},{"preset":"slow"},{"quality":-1},{"quality":52},{"gpu_device":-2},{"chunk_size":-1},{"loop_count":101},{"loop_count":0.5},{"pingpong":1},{"trim_to_audio":"false"}])
 def test_invalid_options(changes):
     with pytest.raises(ValueError):
         validate_options(replace(VideoEncodeOptions(),**changes))
@@ -108,7 +110,7 @@ def test_audio_timing_and_pcm_interleave(tmp_path):
     assert waveform[0,0,-1] == 0.4
 
 
-@pytest.mark.parametrize("codec", CODECS)
+@pytest.mark.parametrize("codec", NVENC_CODECS)
 def test_command_uses_nvenc_and_fixed_argument_list(codec):
     options = VideoEncodeOptions(codec=codec,frame_rate=23.976,quality=19,preset="p6")
     info = (torch.zeros(1,2,48000),48000)
@@ -124,6 +126,107 @@ def test_command_uses_nvenc_and_fixed_argument_list(codec):
     silent = build_encode_command("ffmpeg","video.mp4",320,240,1,options)
     assert "-an" in silent and "-c:a" not in silent
     assert silent[silent.index("-map_metadata")+1] == "-1"
+
+
+@pytest.mark.parametrize("codec", SOFTWARE_CODECS)
+@pytest.mark.parametrize("preset,expected,svt", [("p1","ultrafast","12"),("p4","medium","6"),("p7","veryslow","3")])
+def test_software_command_preserves_format_and_never_passes_nvenc_flags(codec,preset,expected,svt):
+    options = VideoEncodeOptions(codec=codec,preset=preset,quality=19,gpu_device=128)
+    validate_options(options)
+    command = build_encode_command("ffmpeg","video.mp4",320,240,7,options)
+    assert command[command.index("-c:v")+1] == codec
+    assert command[command.index("-preset")+1] == (svt if codec == "libsvtav1" else expected)
+    assert command[command.index("-crf")+1] == "19"
+    assert command[command.index("-pixel_format")+1] == "nv12"
+    assert command[command.index("-pix_fmt")+1] == "yuv420p"
+    assert not set(("-gpu","-cq","-rc","-tune")) & set(command)
+    assert command[-1] == "video.mp4"
+
+
+@pytest.fixture
+def ffmpeg_environment(monkeypatch):
+    monkeypatch.delenv("MAI_FFMPEG_EXE",raising=False)
+    monkeypatch.delenv("IMAGEIO_FFMPEG_EXE",raising=False)
+    module = ModuleType("imageio_ffmpeg")
+    monkeypatch.setitem(sys.modules,"imageio_ffmpeg",module)
+    return module
+
+
+@pytest.mark.parametrize("variable", ["MAI_FFMPEG_EXE","IMAGEIO_FFMPEG_EXE"])
+def test_explicit_ffmpeg_override_has_priority_over_path(monkeypatch,ffmpeg_environment,variable):
+    monkeypatch.setenv(variable,"custom ffmpeg")
+    monkeypatch.setattr(shutil,"which",lambda name: "chosen" if name == "custom ffmpeg" else "system")
+    assert find_ffmpeg() == "chosen"
+
+
+def test_mai_override_takes_priority_over_imageio_override(monkeypatch,ffmpeg_environment):
+    monkeypatch.setenv("MAI_FFMPEG_EXE","mai")
+    monkeypatch.setenv("IMAGEIO_FFMPEG_EXE","imageio")
+    monkeypatch.setattr(shutil,"which",lambda name:name)
+    assert find_ffmpeg() == "mai"
+
+
+def test_invalid_override_fails_instead_of_using_another_binary(monkeypatch,ffmpeg_environment):
+    monkeypatch.setenv("MAI_FFMPEG_EXE","missing")
+    monkeypatch.setattr(shutil,"which",lambda name:"system" if name == "ffmpeg" else None)
+    with pytest.raises(RuntimeError,match="MAI_FFMPEG_EXE.*executable"):
+        find_ffmpeg()
+
+
+def test_system_ffmpeg_and_bundled_fallback(monkeypatch,ffmpeg_environment):
+    monkeypatch.setattr(shutil,"which",lambda name:"system")
+    assert find_ffmpeg() == "system"
+    ffmpeg_environment.get_ffmpeg_exe = lambda:"bundled"
+    monkeypatch.setattr(shutil,"which",lambda name:"bundled" if name == "bundled" else None)
+    assert find_ffmpeg() == "bundled"
+
+
+@pytest.mark.parametrize("failure", ["missing_module","missing_binary","imageio_error"])
+def test_missing_ffmpeg_reports_cloud_installation_and_hardware_limit(monkeypatch,ffmpeg_environment,failure):
+    monkeypatch.setattr(shutil,"which",lambda name:None)
+    if failure == "missing_module":
+        monkeypatch.setitem(sys.modules,"imageio_ffmpeg",None)
+    elif failure == "missing_binary":
+        ffmpeg_environment.get_ffmpeg_exe = lambda:"absent"
+    else:
+        def missing():
+            raise RuntimeError("No ffmpeg exe could be found")
+        ffmpeg_environment.get_ffmpeg_exe = missing
+    with pytest.raises(RuntimeError) as error:
+        find_ffmpeg()
+    message = str(error.value)
+    for expected in ("FFmpeg was not found", "pip install", "apt-get", "Modal", "MAI_FFMPEG_EXE", "B200/B300", "libx264"):
+        assert expected in message
+
+
+def test_software_capability_check_does_not_accept_missing_encoder(monkeypatch):
+    monkeypatch.setattr(subprocess,"run",lambda *a,**k:SimpleNamespace(returncode=0,stdout="",stderr="Codec not found"))
+    with pytest.raises(RuntimeError,match="software encoder"):
+        check_software_support("ffmpeg","libx265")
+
+
+def test_software_encoding_does_not_request_nvenc_memory_or_test_nvenc(tmp_path,monkeypatch):
+    import utils.video_encoding as encoding
+    def unexpected(*args):
+        pytest.fail("Software encoding must not request an NVENC context or capability check")
+    monkeypatch.setattr(encoding,"video_memory_requirements",unexpected)
+    monkeypatch.setattr(encoding,"check_nvenc_support",unexpected)
+    monkeypatch.setattr(encoding,"find_ffmpeg",lambda:"ffmpeg")
+    checks = []
+    monkeypatch.setattr(encoding,"check_software_support",lambda *args:checks.append(args))
+    class SuccessfulEncoder:
+        def __init__(self,command,**kwargs):
+            self.stdin = io.BytesIO()
+            self.returncode = 0
+            from pathlib import Path
+            Path(command[-1]).write_bytes(b"video")
+        def poll(self):
+            return self.returncode
+    monkeypatch.setattr(subprocess,"Popen",SuccessfulEncoder)
+    output = tmp_path/"software.mp4"
+    assert encode_video(torch.zeros(2,4,4,3),output,VideoEncodeOptions(codec="libx264")) == (2,2/24)
+    assert checks == [("ffmpeg","libx264")]
+    assert output.read_bytes() == b"video" and not list(tmp_path.glob(".mai_video_*"))
 
 
 def test_metadata_is_in_a_file_and_escapes_reserved_characters():
@@ -238,8 +341,49 @@ def _decode(path,width,height):
     return torch.frombuffer(bytearray(result.stdout),dtype=torch.uint8).reshape(-1,height,width,3).float()/255
 
 
+ffmpeg = pytest.mark.skipif(
+    os.environ.get("MAI_TEST_FFMPEG") != "1" or not shutil.which("ffmpeg") or not shutil.which("ffprobe"),
+    reason="Set MAI_TEST_FFMPEG=1 with FFmpeg/ffprobe for software integration tests",
+)
+
+
+@ffmpeg
+@pytest.mark.parametrize("codec", SOFTWARE_CODECS)
+@pytest.mark.parametrize("device", ["cpu","cuda"])
+def test_real_software_audio_metadata_dimensions_and_playback_without_nvenc(tmp_path,codec,device):
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA frame conversion needs a CUDA-capable PyTorch environment")
+    frames = torch.zeros(7,241,321,3,device=device)
+    frames[:3,...,0] = 1
+    frames[3:,...,2] = 1
+    before = frames.clone()
+    audio = {"waveform":torch.zeros(1,2,4800),"sample_rate":48000}
+    metadata = {"workflow":{"label":"a=b;#雪"},"prompt":{"1":{}}}
+    output = tmp_path/f"{codec}.mp4"
+    options = VideoEncodeOptions(codec=codec,preset="p3",chunk_size=3,pingpong=True,loop_count=1)
+    count,duration = encode_video(frames,output,options,audio,metadata)
+    assert (count,duration) == (24,1.0)
+    info = _probe(output)
+    video = next(s for s in info["streams"] if s["codec_type"] == "video")
+    sound = next(s for s in info["streams"] if s["codec_type"] == "audio")
+    assert video["codec_name"] == {"libx264":"h264","libx265":"hevc","libsvtav1":"av1"}[codec]
+    assert (video["width"],video["height"],int(video["nb_frames"])) == (322,242,24)
+    assert video["pix_fmt"] == "yuv420p"
+    assert video["color_space"] == "bt709" and video["color_range"] == "tv"
+    assert sound["codec_name"] == "aac" and sound["channels"] == 2
+    assert abs(float(sound["duration"])-duration) < 0.05
+    assert json.loads(info["format"]["tags"]["workflow"]) == metadata["workflow"]
+    decoded = _decode(output,322,242)
+    indices = playback_indices(0,count,7,True)
+    reds = indices < 3
+    assert decoded[reds,:238,:318,0].mean() > 0.94
+    assert decoded[~reds,:238,:318,2].mean() > 0.94
+    torch.testing.assert_close(frames,before)
+    assert not list(tmp_path.glob(".mai_video_*"))
+
+
 @nvenc
-@pytest.mark.parametrize("codec", CODECS)
+@pytest.mark.parametrize("codec", NVENC_CODECS)
 def test_real_nvenc_audio_metadata_dimensions_and_order(tmp_path,codec):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     frames = torch.zeros(7,241,321,3,device=device)

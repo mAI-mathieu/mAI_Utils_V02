@@ -9,7 +9,7 @@ The scope follows the basic functionality of
 [VHS Video Combine](https://github.com/kosinkadink/ComfyUI-VideoHelperSuite#video-combine):
 IMAGE frames, optional AUDIO, frame rate, filename prefix, output/temp saving,
 quality, ping-pong, loops, workflow metadata and a video preview. This node
-exports MP4 using NVENC; it does not reproduce GIF/WebP, arbitrary format JSON,
+exports MP4 using NVENC or explicit software codecs; it does not reproduce GIF/WebP, arbitrary format JSON,
 latent/VAE decoding or VHS's incremental meta-batch protocol.
 
 ## Encoding path
@@ -28,6 +28,8 @@ latent/VAE decoding or VHS's incremental meta-batch protocol.
    centered chroma, matching the tensor conversion. NV12 requires 1.5 bytes per
    pixel instead of RGBX's 4, reducing bridge data by 62.5% without an additional
    CPU color-conversion filter.
+   With `libx264`, `libx265` or `libsvtav1`, FFmpeg instead deinterleaves NV12 to
+   YUV420P and compresses on CPU. The tensor conversion still uses the frame device.
 6. Audio is written as temporary, interleaved float PCM in sample chunks;
    FFmpeg performs AAC encoding and muxing. Excess samples are discarded and
    short audio is padded. Metadata uses a temporary FFmetadata input, avoiding
@@ -49,8 +51,8 @@ All subprocess calls use a known FFmpeg executable, fixed argument lists and
 exposed. Importing the pack or querying the node schema does not launch
 FFmpeg, test a GPU, or initialize CUDA. Capability checks occur at execution.
 FFmpeg error output is captured in a temporary file to avoid stderr pipe
-deadlocks; failed encoding reports the actual diagnostics. No software codec
-fallback hides an unavailable hardware encoder.
+deadlocks; failed encoding reports the actual diagnostics. Software encoding
+requires selecting a software codec; no automatic fallback hides NVENC failures.
 
 Automatic chunks target 64 MiB of packed NV12 (up to 32 frames), not a strict
 total-memory limit. Float conversion, source slices, selected indices and
@@ -84,8 +86,124 @@ and cache clearing add overhead. Budgets are estimates, not guarantees. On
 multiple GPUs, an explicit `gpu_device` is recommended: preparation for `-1`
 targets CUDA device 0 plus the frame device; FFmpeg may choose another capable
 encoder. GPU indices follow the process's CUDA-visible device ordering.
+Software codecs require conversion memory only and do not reserve the NVENC
+context budget, check hardware support or retry hardware OOM errors.
+
+## Cloud setup: Modal and Runpod
+
+According to [NVIDIA's encoding support matrix](https://developer.nvidia.com/video-encode-decode-support-matrix),
+RTX PRO 6000 Blackwell (including Server Edition) has four NVENC engines and
+supports H.264, HEVC and AV1. HGX B200/B300 and GB200/GB300 have zero NVENC
+engines. NVDEC decoding support does not imply encoding support. Installing
+FFmpeg or changing CUDA versions cannot add an encoder to these GPUs.
+
+| GPU | Node codec | Compression |
+| --- | --- | --- |
+| RTX PRO 6000 Blackwell | `h264_nvenc`, `hevc_nvenc`, `av1_nvenc` | NVENC, provided the container exposes the driver libraries |
+| B200 or B300 | `libx264`, `libx265`, `libsvtav1` | CPU; CUDA tensor conversion remains available |
+
+Existing workflows keep `h264_nvenc` as their default. On B200/B300, switch
+the existing codec widget to `libx264` for broadly playable H.264 MP4 output.
+All sockets, timing, audio, metadata and output paths are unchanged. Quality is
+software CRF instead of NVENC CQ; equal numbers do not imply equal quality.
+Presets p1–p7 map to ultrafast/superfast/veryfast/medium/slow/slower/veryslow for
+x264/x265 and 12/10/8/6/5/4/3 for SVT-AV1. CPU encoding may take much longer;
+use p1–p4 initially. `gpu_device` is ignored for software compression.
+
+### FFmpeg installation
+
+Install this repository's `requirements.txt` in ComfyUI's active Python
+environment, not another venv. It now includes `imageio-ffmpeg`, whose bundled
+executable is a fallback when system FFmpeg is absent. There is no download,
+package installation or network call during node execution.
+
+Discovery order is `MAI_FFMPEG_EXE`, `IMAGEIO_FFMPEG_EXE`, PATH, then
+`imageio_ffmpeg.get_ffmpeg_exe()`. Overrides accept one executable path/name,
+including spaces, without embedded quotes or arguments. An invalid override
+fails clearly instead of silently using a different binary. A selected binary
+must provide the requested encoder; installing a Python wrapper named `ffmpeg`
+alone does not install the executable. Wheels/encoder availability can differ
+on ARM64; install system FFmpeg there when needed.
+
+For a Debian/Ubuntu-based Runpod image, include this in the image build:
+
+```dockerfile
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
+```
+
+For an already running Debian/Ubuntu pod, `apt-get update && apt-get install -y ffmpeg`
+fixes the missing executable if run with package-install permissions. Put the
+installation into the template/image too so replacement pods retain it.
+
+For Modal, extend the existing ComfyUI image definition:
+
+```python
+image = image.apt_install("ffmpeg").env({
+    "NVIDIA_DRIVER_CAPABILITIES": "compute,utility,video",
+})
+```
+
+Use that image in your existing function/sandbox and rebuild/redeploy it.
+These methods follow [Modal's image documentation](https://modal.com/docs/guide/images).
+NVENC on RTX PRO 6000 additionally requires `libnvidia-encode.so.1` and a
+compatible host driver. In NVIDIA Container Toolkit deployments, the
+`video` capability mounts the video driver libraries; defaults usually expose
+only compute/utility. Configure it before container creation, as explained by
+[NVIDIA](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/docker-specialized.html).
+Changing the environment inside a running container cannot mount missing
+libraries, and the capability variable alone does not guarantee Modal's
+runtime exposes them. Verify with the actual encoding command below; if they
+are unavailable, use an explicit software codec or an environment with video
+driver support. Do not install host NVIDIA drivers into the ComfyUI venv.
+
+Use ComfyUI/PyTorch/CUDA versions compatible with your GPU separately from
+FFmpeg. [Modal's GPU guide](https://modal.com/docs/guide/gpu) currently specifies
+CUDA 13.1+ for B300. This pack uses existing PyTorch operations and does not
+install or replace the platform's CUDA/PyTorch packages.
+
+### Verify inside the running cloud container
+
+First confirm the actual executable and encoder (from this repository):
+
+```bash
+python -c "from utils.video_encoding import find_ffmpeg; print(find_ffmpeg())"
+ffmpeg -hide_banner -h encoder=h264_nvenc
+```
+
+An encoder help/list entry proves build support only. On RTX PRO 6000, this
+one-frame encode also checks driver visibility and hardware initialization:
+
+```bash
+ffmpeg -hide_banner -loglevel error -f lavfi -i color=black:s=128x128:r=24 \
+    -frames:v 1 -c:v h264_nvenc -gpu 0 -f null -
+```
+
+On B200/B300 replace `-c:v h264_nvenc -gpu 0` with `-c:v libx264`. If using
+only the bundled executable, substitute the path printed by `find_ffmpeg()`
+for `ffmpeg`; ffprobe is provided by the system package for integration tests.
+Then restart ComfyUI, select the matching codec, connect a short frame batch,
+queue the node and check the preview, audio and saved video. Test HEVC/AV1
+separately if needed; browser playback support varies. Cloud machines were
+not available for live testing in this workspace.
 
 ## Validation
+
+On 2026-10-05, the full suite passed **1,008 tests** on the local Windows /
+RTX 5090 / PyTorch 2.7.1+cu128 environment with both `MAI_TEST_NVENC=1` and
+`MAI_TEST_FFMPEG=1`. System FFmpeg encoded all three NVENC and all three
+software codecs; software integration ran with both CPU and CUDA frame tensors.
+The pack imported successfully with 22 registered nodes, including the unchanged
+`MAIGPUVideoCombine` mapping and socket contract.
+
+The separate imageio-ffmpeg 0.6.0 Windows-wheel check confirmed executable
+discovery when system FFmpeg is hidden, and seven successful encode/decode cases:
+H.264/HEVC software with CPU/CUDA frames, plus all three NVENC codecs. This
+wheel lacks `libsvtav1`; its two software AV1 cases correctly failed with the
+missing-encoder diagnostic. Use a system FFmpeg with SVT-AV1 for that selection.
+The Linux wheel and live Modal/Runpod RTX PRO 6000/B200/B300 were not tested;
+the runtime check above is needed on each deployed cloud image.
 
 On 2026-10-02, the complete suite with `MAI_TEST_NVENC=1` passed **913 tests**
 on Windows, RTX 5090 and PyTorch 2.7.1+cu128. All three NVENC codecs encoded
@@ -121,9 +239,19 @@ On Linux:
 MAI_TEST_NVENC=1 python -m pytest tests/test_video_encoding.py tests/test_gpu_video_combine.py
 ```
 
-Tests without the environment flag skip hardware integration and do not require
-an FFmpeg installation. Runtime imports and preview UI behavior inside the
-user's live ComfyUI remain subject to the previously identified broken local
-venv launcher; the native preview response follows the installed ComfyUI core's
-`PreviewVideo` format. Linux uses the same subprocess/torch APIs but was not
-tested on a Linux host.
+For software-only integration (also suitable for B200/B300):
+
+```bash
+MAI_TEST_FFMPEG=1 python -m pytest tests/test_video_encoding.py tests/test_gpu_video_combine.py
+```
+
+Software integration covers all three codecs with actual FFmpeg/ffprobe,
+audio, Unicode metadata, odd dimensions, ping-pong/repeats and decoded frames.
+Discovery regression tests simulate missing PATH binaries, bundled executables,
+environment overrides and package errors without requiring FFmpeg or a GPU.
+
+Tests without the environment flags skip encoding integration and do not require
+an FFmpeg installation. Standalone pack imports were verified; preview UI
+behavior inside a live cloud ComfyUI instance still requires deployment testing.
+The native preview response follows ComfyUI's `PreviewVideo` format. Linux uses
+the same subprocess/torch APIs but was not tested on a Linux host.

@@ -1,4 +1,4 @@
-"""Chunked tensor-to-FFmpeg bridge for NVIDIA hardware video encoding.
+"""Chunked tensor-to-FFmpeg bridge for NVENC and explicit software encoding.
 
 Only fixed FFmpeg argument lists are executed, with shell=False. No image
 files, shell scripts, VHS imports or per-frame conversion loops are used.
@@ -23,8 +23,12 @@ import torch.nn.functional as F
 from .gpu_memory import gpu_memory_scope, video_memory_requirements
 
 
-CODECS = ("h264_nvenc", "hevc_nvenc", "av1_nvenc")
+NVENC_CODECS = ("h264_nvenc", "hevc_nvenc", "av1_nvenc")
+SOFTWARE_CODECS = ("libx264", "libx265", "libsvtav1")
+CODECS = NVENC_CODECS + SOFTWARE_CODECS
 PRESETS = tuple(f"p{i}" for i in range(1, 8))
+SOFTWARE_PRESETS = ("ultrafast", "superfast", "veryfast", "medium", "slow", "slower", "veryslow")
+SVT_AV1_PRESETS = (12, 10, 8, 6, 5, 4, 3)
 
 
 class NVENCOutOfMemoryError(RuntimeError):
@@ -54,9 +58,9 @@ def validate_options(options):
     if isinstance(fps, bool) or not isinstance(fps, Real) or not math.isfinite(fps) or not 0 < fps <= 1000:
         raise ValueError("frame_rate must be a finite number greater than 0 and at most 1000.")
     if options.codec not in CODECS:
-        raise ValueError(f"Unknown NVENC codec: {options.codec}")
+        raise ValueError(f"Unknown video codec: {options.codec}")
     if options.preset not in PRESETS:
-        raise ValueError(f"Unknown NVENC preset: {options.preset}")
+        raise ValueError(f"Unknown video preset: {options.preset}")
     for name, low, high in (("quality", 0, 51), ("gpu_device", -1, 128),
                             ("chunk_size", 0, 4096), ("loop_count", 0, 100)):
         _integer(getattr(options, name), name, low, high)
@@ -131,6 +135,16 @@ def calculate_video_timing(source_frames, options, audio_info=None):
 
 
 def find_ffmpeg():
+    # Explicit overrides also work without imageio-ffmpeg installed. These are
+    # executable paths/names, never shell commands or extra FFmpeg arguments.
+    for variable in ("MAI_FFMPEG_EXE", "IMAGEIO_FFMPEG_EXE"):
+        configured = os.environ.get(variable)
+        if configured:
+            executable = shutil.which(configured)
+            if executable:
+                return executable
+            raise RuntimeError(f"{variable} does not identify an executable FFmpeg file. "
+                               "Set it to the executable path, without quotes or arguments.")
     executable = shutil.which("ffmpeg")
     if executable:
         return executable
@@ -140,10 +154,24 @@ def find_ffmpeg():
         if exc.name != "imageio_ffmpeg":
             raise
     else:
-        candidate = get_ffmpeg_exe()
-        if Path(candidate).is_file():
-            return candidate
-    raise RuntimeError("FFmpeg was not found. Install an NVENC-enabled FFmpeg and put it on PATH.")
+        try:
+            candidate = get_ffmpeg_exe()
+        except (RuntimeError, OSError) as exc:
+            raise RuntimeError(_missing_ffmpeg_message()) from exc
+        executable = shutil.which(candidate)
+        if executable:
+            return executable
+    raise RuntimeError(_missing_ffmpeg_message())
+
+
+def _missing_ffmpeg_message():
+    return ("FFmpeg was not found. Install this pack's requirements in the Python environment "
+            "running ComfyUI (python -m pip install -r requirements.txt), or install system FFmpeg. "
+            "For Debian/Ubuntu Runpod images: apt-get update && apt-get install -y ffmpeg. "
+            "For Modal: add .apt_install('ffmpeg') to the ComfyUI image and rebuild it. "
+            "You can also set MAI_FFMPEG_EXE or IMAGEIO_FFMPEG_EXE to an existing executable. "
+            "NVENC additionally requires a supported GPU and exposed NVIDIA video driver libraries; "
+            "B200/B300 have no NVENC, so select libx264, libx265 or libsvtav1.")
 
 
 def _process_flags():
@@ -156,7 +184,17 @@ def check_nvenc_support(executable, codec):
     description = info.stdout + info.stderr
     if info.returncode or f"Encoder {codec} " not in description or "nv12" not in description:
         raise RuntimeError(f"This FFmpeg build does not support {codec} with NV12 input. "
-                           "Use an NVENC-enabled build; no CPU fallback is performed.")
+                           "Use an NVENC-enabled build; no CPU fallback is performed. "
+                           "B200/B300 have no NVENC hardware; select an explicit software codec instead.")
+
+
+def check_software_support(executable, codec):
+    info = subprocess.run([executable, "-hide_banner", "-h", f"encoder={codec}"],
+                          capture_output=True, text=True, timeout=15, shell=False, **_process_flags())
+    description = info.stdout + info.stderr
+    if info.returncode or f"Encoder {codec} " not in description or "yuv420p" not in description:
+        raise RuntimeError(f"This FFmpeg build does not support {codec} with YUV420P output. "
+                           "Install FFmpeg with that software encoder, or select libx264 for H.264.")
 
 
 def build_encode_command(executable, output_path, width, height, frame_count,
@@ -177,15 +215,23 @@ def build_encode_command(executable, output_path, width, height, frame_count,
     else:
         args += ["-an"]
     args += ["-map_metadata", str(2 if audio_path is not None else 1) if metadata_path is not None else "-1",
-             "-c:v", options.codec, "-preset", options.preset, "-tune", "hq",
-             "-rc", "vbr", "-cq", str(options.quality), "-b:v", "0",
-             "-gpu", str(options.gpu_device), "-pix_fmt", "nv12",
-             "-color_range", "tv", "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
+             "-c:v", options.codec]
+    if options.codec in NVENC_CODECS:
+        args += ["-preset", options.preset, "-tune", "hq", "-rc", "vbr",
+                 "-cq", str(options.quality), "-b:v", "0", "-gpu", str(options.gpu_device),
+                 "-pix_fmt", "nv12"]
+    else:
+        preset_index = PRESETS.index(options.preset)
+        preset = (str(SVT_AV1_PRESETS[preset_index]) if options.codec == "libsvtav1"
+                  else SOFTWARE_PRESETS[preset_index])
+        args += ["-preset", preset, "-crf", str(options.quality), "-pix_fmt", "yuv420p"]
+    args += ["-color_range", "tv", "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
              "-chroma_sample_location", "center",
              "-frames:v", str(frame_count), "-t", format(frame_count / options.frame_rate, ".12g"),
              "-movflags", "+faststart+use_metadata_tags", "-f", "mp4", str(output_path)]
     # NV12 has already been converted on the tensor's device using BT.709.
-    # No CPU swscale filter or unnecessary hardware-decode flag is inserted.
+    # Software codecs deinterleave NV12 to planar YUV420P in FFmpeg; no second
+    # RGB color conversion or unnecessary hardware-decode flag is inserted.
     return args
 
 
@@ -266,7 +312,11 @@ def encode_video(frames, output_path, options=None, audio=None, metadata=None,
     chunk_size = options.chunk_size or max(1, min(32, (64 * 1024 * 1024) // (width * height * 3 // 2)))
     # FP32 RGB, conversion arithmetic, NV12, padding and pingpong selection.
     conversion_bytes = min(source_count, chunk_size) * width * height * 48
-    budgets = video_memory_requirements(frames.device, options.gpu_device, conversion_bytes)
+    if options.codec in NVENC_CODECS:
+        budgets = video_memory_requirements(frames.device, options.gpu_device, conversion_bytes)
+    else:
+        # Software compression needs no external CUDA context or NVENC budget.
+        budgets = {frames.device: conversion_bytes} if frames.device.type == "cuda" else {}
     for attempt in range(2):
         try:
             with ExitStack() as stack:
@@ -286,7 +336,7 @@ def encode_video(frames, output_path, options=None, audio=None, metadata=None,
 
 def _encode_video(frames, output_path, options=None, audio=None, metadata=None,
                   check_interrupt=None, on_progress=None):
-    """Encode one MP4 with NVENC; return encoded frame count and duration.
+    """Encode one MP4; return encoded frame count and duration.
 
     The fixed FFmpeg child consumes chunked NV12 through stdin. Temporary PCM
     and metadata are cleaned on every exit. Only a complete video is published;
@@ -303,7 +353,11 @@ def _encode_video(frames, output_path, options=None, audio=None, metadata=None,
     if output.exists():
         raise FileExistsError(f"Video destination already exists: {output.name}")
     executable = find_ffmpeg()
-    check_nvenc_support(executable, options.codec)
+    hardware = options.codec in NVENC_CODECS
+    if hardware:
+        check_nvenc_support(executable, options.codec)
+    else:
+        check_software_support(executable, options.codec)
     if check_interrupt:
         check_interrupt()
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -351,7 +405,7 @@ def _encode_video(frames, output_path, options=None, audio=None, metadata=None,
                     if check_interrupt:
                         check_interrupt()
                     if time.monotonic() >= deadline:
-                        raise RuntimeError("NVENC did not finish within 120 seconds after the last frame.")
+                        raise RuntimeError("FFmpeg did not finish within 120 seconds after the last frame.")
                     try:
                         process.wait(timeout=0.2)
                     except subprocess.TimeoutExpired:
@@ -359,10 +413,15 @@ def _encode_video(frames, output_path, options=None, audio=None, metadata=None,
                 if process.returncode != 0 or pipe_error is not None:
                     stderr.seek(0)
                     details = stderr.read()[-8000:].decode("utf-8", errors="replace").strip()
-                    error_type = NVENCOutOfMemoryError if "CUDA_ERROR_OUT_OF_MEMORY" in details else RuntimeError
-                    raise error_type(f"NVENC video encoding failed ({options.codec}). "
-                                       "Check the NVIDIA driver, codec support, frame dimensions and available GPU memory.\n"
-                                       + (details or str(pipe_error))) from pipe_error
+                    error_type = NVENCOutOfMemoryError if hardware and "CUDA_ERROR_OUT_OF_MEMORY" in details else RuntimeError
+                    hint = ("Check the NVIDIA driver, codec support, frame dimensions and available GPU memory. "
+                            "Linux containers must expose libnvidia-encode.so.1 (NVIDIA video capability). "
+                            "B200/B300 have no NVENC; select libx264, libx265 or libsvtav1. "
+                            "No CPU fallback is performed." if hardware else
+                            "Check FFmpeg software codec support, frame dimensions and available CPU memory.")
+                    label = "NVENC" if hardware else "Software"
+                    raise error_type(f"{label} video encoding failed ({options.codec}). {hint}\n"
+                                     + (details or str(pipe_error))) from pipe_error
             finally:
                 if process.poll() is None:
                     process.kill()

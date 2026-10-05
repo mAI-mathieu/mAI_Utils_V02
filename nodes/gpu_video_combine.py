@@ -1,4 +1,4 @@
-"""ComfyUI output node for frames + optional AUDIO -> NVENC MP4."""
+"""ComfyUI output node for frames + optional AUDIO -> MP4."""
 
 from pathlib import Path
 import sys
@@ -23,8 +23,9 @@ class MAIGPUVideoCombine:
     RETURN_TYPES = ("VHS_FILENAMES", "STRING", "INT", "FLOAT")
     RETURN_NAMES = ("filenames", "file_path", "frame_count", "duration")
     DESCRIPTION = (
-        "Combine IMAGE frames and optional AUDIO into MP4 using NVIDIA NVENC. "
-        "RGB-to-NV12 conversion runs on the tensor's device; encoding uses NVENC. FFmpeg input crosses a CPU buffer. "
+        "Combine IMAGE frames and optional AUDIO into MP4 using NVIDIA NVENC or an explicit software codec. "
+        "B200/B300 have no NVENC: select libx264, libx265 or libsvtav1. "
+        "RGB-to-NV12 conversion runs on the tensor's device. FFmpeg input crosses a CPU buffer. "
         "Odd dimensions are padded right/bottom to even sizes."
     )
 
@@ -37,8 +38,8 @@ class MAIGPUVideoCombine:
                 "filename_prefix": ("STRING", {"default": "video/mAI"}),
                 "codec": (list(CODECS), {"default": "h264_nvenc"}),
                 "quality": ("INT", {"default": 23, "min": 0, "max": 51,
-                                    "tooltip": "NVENC CQ: lower is higher quality and larger files. This is not software CRF."}),
-                "preset": (list(PRESETS), {"default": "p4"}),
+                                    "tooltip": "NVENC CQ or software CRF: lower is higher quality and larger files. Values differ between encoders."}),
+                "preset": (list(PRESETS), {"default": "p4", "tooltip": "p1 fastest to p7 slowest. Software codecs map these to their speed presets."}),
                 "pingpong": ("BOOLEAN", {"default": False}),
                 "loop_count": ("INT", {"default": 0, "min": 0, "max": 100,
                                        "tooltip": "Additional encoded repeats. Audio plays once, then pads with silence."}),
@@ -46,7 +47,7 @@ class MAIGPUVideoCombine:
                 "save_output": ("BOOLEAN", {"default": True}),
                 "save_metadata": ("BOOLEAN", {"default": True}),
                 "gpu_device": ("INT", {"default": -1, "min": -1, "max": 128,
-                                       "tooltip": "FFmpeg NVENC device index; -1 selects an available GPU."}),
+                                       "tooltip": "FFmpeg NVENC device index; -1 selects an available GPU. Ignored for software codecs."}),
                 "chunk_size": ("INT", {"default": 0, "min": 0, "max": 4096,
                                        "tooltip": "Frames converted/transferred per chunk. 0 chooses up to 64 MiB of packed pixels."}),
             },
