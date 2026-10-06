@@ -88,7 +88,7 @@ matching endpoints alone never establish a good loop.
 
 For an error map E and detail map D, use
 `W = 1 + 3*clamp(D/(mean(D)+1e-6), max=20)` and
-`R(E,D) = .7*sum(E*W)/sum(W) + .3*max(mean(E) in a 4x4 region grid)`.
+`R(E,D) = .7*sum(E*W)/sum(W) + .3*max(mean(E) in an 8x8 region grid)`.
 Detail is luminance finite-difference edges plus local temporal activity. This
 gives small textured/moving regions more influence than blank backgrounds.
 It is a salience approximation, **not face/hand detection**; tiny details below
@@ -96,18 +96,28 @@ proxy resolution, textureless subjects, occlusions and arbitrary alpha can fool 
 
 Let d be signed adjacent-frame differences, u the corresponding R(abs(d)),
 v the R(abs(d[t+1]-d[t])), e the absolute per-channel mean of d, and
-`P(z)=.75*max(z)+.25*mean(z)` over the window. Let r=fps/24, and q_u, q_e, q_v
+`P(z)=.75*max(z)+.25*mean(z)` over the affected samples. Let r=fps/24, and q_u, q_e, q_v
 be robust upper quartiles over original consecutive frame differences/accelerations.
-Upper quartiles tolerate ordinary motion when a clip contains long pauses, while
-a single corrupt exposure frame cannot establish a large normal-change baseline.
-The reported metrics are:
+In **objective version 2**, these quartiles cap local reference levels rather
+than directly excusing every boundary error. For u/e, take the maximum of the
+two original pairs before the transition and the two after it, then use the
+minimum of the two sides and the corresponding quartile. Call these c_u/c_e.
+For v, take the maximum original acceleration on each side (two untouched
+samples for K>=2, one for K=0/1), then the minimum of both sides and q_v: c_v.
+Strong activity in the middle cannot establish a large tolerance at quiet ends,
+and a faster-moving head cannot excuse a cut inside a two-frame overlap.
+
+Score newly changed pairs only: the seam for K=0, both links for K=1, and internal
+bridge pairs for K>=2, whose inclusive endpoint links remain original. Motion
+scores all accelerations affected by those pairs. Raw context provides tolerances
+without being included in its own discontinuity penalty. The reported metrics are:
 
 | Term | Definition | Default weight |
 |---|---|---:|
-| appearance | `max(0,P(u)-1.5*q_u)*r` | 1.0 |
-| exposure | `max(0,P(e)-1.5*q_e)*r` | 0.5 |
-| motion | `max(0,P(v)-1.5*q_v)*r^2` | 0.6 |
-| smoothness | `max(abs(u[t+1]-u[t]))*r` | 0.4 |
+| appearance | `P(max(0,u-1.5*c_u))*r` on changed pairs | 1.0 |
+| exposure | `P(max(0,e-1.5*c_e))*r` on changed pairs | 0.5 |
+| motion | `P(max(0,v-1.5*c_v))*r^2` on affected accelerations | 0.6 |
+| smoothness | `max(abs(u[t+1]-u[t]))*r` next to the transition | 0.4 |
 | ghosting | P of tail/head regional mismatch plus 0.25 edge mismatch, times `4*w*(1-w)` | 1.0 |
 | duration | `(N-Nout)/N` | 0.25 |
 | fade | `K/N` | 0.12 |
@@ -123,6 +133,9 @@ stage-1 activity prefix sums and refinement q_u; a one-frame exposure outlier is
 not treated as essential action when normal motion is zero. It is approximate
 activity retention, not semantic usefulness. Timing and score changes across
 quality levels are expected; this is not a perceptually calibrated metric.
+Version 1 used whole-clip quartiles directly, which could incorrectly mark a
+small pose/framing jump as satisfactory after a larger camera move. Scores from
+different objective versions are not directly comparable.
 
 Selection is explicitly satisficing: unchanged wins when its refined score meets
 the threshold. Otherwise, among satisfactory refined choices minimize total lost
@@ -219,7 +232,8 @@ identified image batch was supplied/found inside this repository, so the suggest
 
 ### Local verification, 2026-10-06
 
-Full suite: **1,140 passed, 14 skipped**, including **61 focused loop tests**.
+Full suite after the scoring fix: **1,145 passed, 14 skipped**, including
+**66 focused loop tests**.
 The new node and existing registrations import together; frontend and deployment
 sources passed syntax checks, and example socket/widget wiring is tested. Full
 ComfyUI GUI playback was not performed. The host's standalone Python environment
@@ -228,7 +242,8 @@ launcher on this machine points to an unavailable interpreter, so these results
 are not a claim that its venv ran the test suite. Installed ComfyUI source APIs
 were inspected directly. No core files or existing node contracts were changed.
 
-Sequential isolated-process benchmarks (two warm runs; host default 24 CPU threads):
+Initial objective-version-1 isolated-process benchmarks (two warm runs; host
+default 24 CPU threads; these historical timings were not rerun for version 2):
 
 | Case | Candidates | Warm search | Warm refinement + transfers | Warm render + transfers | Warm end-to-end |
 |---|---:|---:|---:|---:|---:|
@@ -262,3 +277,22 @@ equivalent within 2e-5 for close candidates. CUDA tests skip without hardware.
 Real subjective seam quality still needs repeated playback and cannot be certified
 by these synthetic tests. See deployment examples and verification notes in
 `deployment/auto_seamless_loop/README.md`.
+
+### Boundary scoring regression
+
+The supplied output MP4 was also decoded and tested at its original 912x1600
+resolution: 121 frames at 24 FPS. Its saved report had accepted all frames
+unchanged. With objective version 2, balanced mode selected trims 0/5 and K=0,
+retaining 116 frames (4.833 seconds), with **uncertain** confidence. This verifies
+the incorrect unchanged decision is corrected; it does not certify a visually
+seamless result. No source video, personal path, or video decoding dependency is
+included in the package. Audio was excluded from the development preview because
+shortening changes alignment.
+
+New synthetic regressions cover strong interior activity hiding a quiet localized
+endpoint offset, reduced actual bridge pixel jumps, and a two-frame cut borrowing
+tolerance from faster head motion. Fast proxies can still miss subtle details.
+For a visible residual cut, try advanced manual overlap 1 (one midpoint frame) or
+3/4 (a short mixed bridge); overlap 2 is a cut with endpoint trimming. These are
+crossfades, so displaced faces/hands may ghost. The node does not perform optical
+flow alignment or regenerate intermediate motion.

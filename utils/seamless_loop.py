@@ -200,11 +200,11 @@ def _edges(frames):
 
 
 def _region_error(error, detail):
-    """70% salience weighted pixels + 30% worst of a 4x4 region grid."""
+    """70% salience weighted pixels + 30% worst of an 8x8 region grid."""
     weights = 1 + 3 * (detail / (detail.mean((-2, -1), keepdim=True) + 1e-6)).clamp(max=20)
     weighted = (error * weights).sum((-2, -1)) / weights.sum((-2, -1))
     h, w = error.shape[-2:]
-    tiles = F.adaptive_avg_pool2d(error.reshape(-1, 1, h, w), (min(4, h), min(4, w)))
+    tiles = F.adaptive_avg_pool2d(error.reshape(-1, 1, h, w), (min(8, h), min(8, w)))
     worst = tiles.flatten(1).amax(1).reshape(error.shape[:-2])
     return 0.7 * weighted + 0.3 * worst
 
@@ -287,10 +287,33 @@ def _score_batch(frames, edges, candidates, n, options, baseline, motion_prefix,
     accel = _region_error(acceleration.abs().mean(-1), pair_detail[:, 1:])
     exposure = delta[..., :min(3, frames.shape[-1])].mean((-3, -2)).abs().mean(-1)
     scale = options.fps / 24.0
-    appearance = (_temporal_peak(step) - baseline[0] * 1.5).clamp_min(0) * scale
-    color = (_temporal_peak(exposure) - baseline[1] * 1.5).clamp_min(0) * scale
-    motion = (_temporal_peak(accel) - baseline[2] * 1.5).clamp_min(0) * scale ** 2
-    smoothness = (step[:, 1:] - step[:, :-1]).abs().amax(1) * scale
+    # A camera move in the middle of the clip must not excuse a cut between
+    # settled endpoints. Reference actual original motion next to each junction.
+    def transition_reference(values, global_reference):
+        left = values[:, :2].amax(1)
+        right = values[:, -2:].amax(1)
+        # Use the quieter side throughout. Interpolating these scalar tolerances
+        # would excuse a cut inside a K=2 bridge when the head starts moving.
+        reference = torch.minimum(left, right)[:, None]
+        return torch.minimum(reference, global_reference)
+
+    step_reference = transition_reference(step, baseline[0])
+    color_reference = transition_reference(exposure, baseline[1])
+    # For inclusive endpoints, two acceleration samples at each end are still
+    # original. K=0/1 only have one untouched sample at each end. Never include
+    # a seam-affected sample in its own tolerance.
+    left_accel = accel[:, :2].amax(1) if k >= 2 else accel[:, 0]
+    right_accel = accel[:, -2:].amax(1) if k >= 2 else accel[:, -1]
+    accel_reference = torch.minimum(torch.minimum(left_accel, right_accel), baseline[2])[:, None]
+    # Inclusive K>=2 endpoints leave the incoming/outgoing source pairs intact;
+    # only internal bridge pairs are newly constructed. K=0/1 change both links.
+    changed_steps = step[:, 3:-3] if k >= 2 else step[:, 2:-2]
+    changed_exposure = exposure[:, 3:-3] if k >= 2 else exposure[:, 2:-2]
+    appearance = _temporal_peak((changed_steps - step_reference * 1.5).clamp_min(0)) * scale
+    color = _temporal_peak((changed_exposure - color_reference * 1.5).clamp_min(0)) * scale
+    changed_accel = accel[:, 2:-2] if k >= 2 else accel[:, 1:-1]
+    motion = _temporal_peak((changed_accel - accel_reference * 1.5).clamp_min(0)) * scale ** 2
+    smoothness = (step[:, 1:] - step[:, :-1]).abs()[:, 1:-1].amax(1) * scale
     ghost = torch.zeros(len(candidates), device=device)
     if k:
         # Measure overlapping incompatible structure, weighted by actual mixing.
@@ -516,7 +539,7 @@ def _search(images, options, device, candidates, chunk, render_chunk, output_dev
               "input_frames": n, "output_frames": n - selected.trim_start - selected.trim_end - selected.overlap,
               "fps": options.fps, "input_duration_seconds": n / options.fps,
               "blend_space": options.blend_space, "proxy_long_edge": small_size, "refine_long_edge": refine_size,
-              "options": asdict(options), "objective_version": 1, "optical_flow": "not used; temporal difference heuristic"}
+              "options": asdict(options), "objective_version": 2, "optical_flow": "not used; temporal difference heuristic"}
     report["output_duration_seconds"] = report["output_frames"] / options.fps
     del refined, refined_scores, metrics, lookup, prefix
     if on_progress:

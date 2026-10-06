@@ -125,6 +125,56 @@ def test_detail_regions_reveal_small_object_offset_on_blank_background():
     assert m[0, 0] > global_error * 2
 
 
+def quiet_endpoints_with_busy_middle():
+    x = torch.full((60, 32, 48, 3), 0.2)
+    base = x[0].clone()
+    base[12:20, 16:24] = 0.8
+    x[:8] = base
+    x[-8:] = base.roll(2, dims=1)
+    for i in range(8, 52):
+        x[i] = base.roll(4 * i, dims=1) * (0.3 if i % 2 else 1)
+    return x
+
+
+def test_busy_middle_cannot_excuse_quiet_endpoint_jump():
+    x = quiet_endpoints_with_busy_middle()
+    baseline, _ = loop._baseline(x, loop._edges(x))
+    _, metrics = score_candidates(x, [loop.LoopCandidate()], options())
+    # The old whole-clip quartile subtracts away this localized discontinuity.
+    assert baseline[0] > 0.3
+    assert metrics[0, loop.METRICS.index("appearance")] > 0.1
+    assert metrics[0, loop.METRICS.index("motion")] > 0.1
+
+
+@pytest.mark.parametrize("quality", ["fast", "balanced", "high"])
+def test_busy_middle_repair_reduces_actual_transition_jump(quality):
+    x = quiet_endpoints_with_busy_middle()
+    result, report = loop.optimize_loop(x, options(quality=quality, max_trim_start=0, max_trim_end=0))
+    k = report["selected"]["overlap"]
+    assert k > 0 and report["selection"] != "unchanged_satisfactory"
+    assert report["objective_version"] == 2
+    # Independent pixel differences across all bridge links, including repeat.
+    window = torch.cat((result[-k - 3:], result[:3]))
+    repaired_jump = (window[1:] - window[:-1]).abs().amax()
+    original_jump = (x[0] - x[-1]).abs().amax()
+    assert repaired_jump < original_jump * 0.5
+    # A smoother fade still has ghosting; it must not be advertised as perfect.
+    assert report["confidence"] == "low"
+
+
+def test_two_frame_cut_cannot_borrow_head_motion_tolerance():
+    x = torch.full((60, 8, 12, 3), 0.2)
+    x[1], x[2], x[3] = 0.24, 0.30, 0.38
+    for i in range(8, 52):
+        x[i] = 0.1 if i % 2 else 0.9
+    _, metrics = score_candidates(x, [loop.LoopCandidate(0, 0, 2)], options())
+    # K=2 has no mixed pixels: the only new pair jumps from .2 to .24.
+    # Score that cut even though the outgoing, unchanged head motion is faster.
+    assert metrics[0, loop.METRICS.index("appearance")] == pytest.approx(0.04, abs=1e-6)
+    assert metrics[0, loop.METRICS.index("exposure")] == pytest.approx(0.04, abs=1e-6)
+    assert metrics[0, loop.METRICS.index("ghosting")] == 0
+
+
 def test_moving_objects_long_fades_have_real_ghost_penalty():
     x = torch.zeros(20, 24, 40, 3)
     for i in range(20):
