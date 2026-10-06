@@ -18,7 +18,7 @@ class MAIAutoSeamlessLoop:
     RETURN_NAMES = ("images", "fps", "frame_count", "trim_start", "trim_end", "overlap", "report")
     DESCRIPTION = (
         "Jointly search trims and crossfades for an ordered video IMAGE batch. "
-        "Heuristic scoring checks motion, color, detailed regions and ghosting. "
+        "Score the start/end transition for microjumps, motion, brightness, contrast and ghosting. "
         "Output may be shorter; FPS is unchanged. No video encoder or model required."
     )
 

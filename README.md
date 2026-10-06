@@ -1216,9 +1216,18 @@ The objective is a documented two-stage heuristic, not a guarantee of perceptual
 perfection. Tiny subjects, occlusions and motion may remain difficult; uncertain
 or poor results are reported. Default shortening/phase rotation does not preserve
 audio alignment. High mode uses larger proxies rather than optical flow.
-Objective version 2 compares each transition with the quieter original motion
-beside its endpoints, so a large camera move elsewhere cannot hide a boundary
-jump. Detail scoring uses an 8x8 region grid. Fast mode can still miss subtle
+For clips already intended to loop, objective version 3 searches every permitted
+start/end trim pair and each valid overlap from zero through `max_fade`. Both
+scoring stages inspect only candidate boundary neighborhoods and the actual
+fade; the middle does not supply motion tolerances or an activity penalty.
+The score checks microjumps, nearby motion, brightness/color, contrast changes,
+and structural ghosting using an 8x8 detail grid. `exposure_weight` controls both
+brightness/color and contrast. Ghost scoring compares structure at matched tone,
+so a lighting change alone is not treated as a doubled image; rendered colors
+are never automatically normalized. Retention and duration/fade penalties keep
+repairs short. The JSON reports `contrast`, `objective_version=3`, and the scoring
+scope; the existing `activity_loss` report key remains, fixed at zero.
+Fast mode can still miss subtle
 localized jumps; use balanced/high and inspect repeated playback. If automatic
 trimming leaves a visible cut, advanced manual overlap can force a short fade
 (1 is a midpoint blend; 2 contains only unmixed endpoints). This can introduce

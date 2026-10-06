@@ -14,7 +14,7 @@ import torch.nn.functional as F
 
 
 QUALITY = {"fast": (64, 128, 4), "balanced": (96, 256, 8), "high": (128, 384, 16)}
-METRICS = ("appearance", "exposure", "motion", "smoothness", "ghosting", "duration", "fade", "activity_loss")
+METRICS = ("appearance", "exposure", "motion", "smoothness", "ghosting", "duration", "fade", "activity_loss", "contrast")
 
 
 @dataclass(frozen=True, order=True)
@@ -254,7 +254,25 @@ def _boundary_indices(candidates, n):
     return sorted(indices)
 
 
-def _score_batch(frames, edges, candidates, n, options, baseline, motion_prefix, lookup=None):
+def _match_pair_tone(tail, head):
+    """Compare structure at shared contrast, without counting a tone shift as ghosts.
+
+    This affects scoring only. Rendered pixels retain their original color.
+    Using the lower contrast avoids amplifying noise in nearly flat images.
+    """
+    channels = min(3, tail.shape[-1])
+    t, h = tail[..., :channels], head[..., :channels]
+    t_mean, h_mean = t.mean((-3, -2), keepdim=True), h.mean((-3, -2), keepdim=True)
+    t_std, h_std = t.std((-3, -2), correction=0, keepdim=True), h.std((-3, -2), correction=0, keepdim=True)
+    shared = torch.minimum(t_std, h_std)
+    t = (t - t_mean) * (shared / t_std.clamp_min(1e-6))
+    h = (h - h_mean) * (shared / h_std.clamp_min(1e-6))
+    if tail.shape[-1] > channels:
+        t, h = torch.cat((t, tail[..., channels:]), -1), torch.cat((h, head[..., channels:]), -1)
+    return t, h
+
+
+def _score_batch(frames, edges, candidates, n, options, lookup=None):
     """Candidates in a batch share K, allowing one gathered transition tensor."""
     device = frames.device
     params = torch.tensor([(c.trim_start, c.trim_end, c.overlap) for c in candidates], device=device)
@@ -286,31 +304,36 @@ def _score_batch(frames, edges, candidates, n, options, baseline, motion_prefix,
     acceleration = delta[:, 1:] - delta[:, :-1]
     accel = _region_error(acceleration.abs().mean(-1), pair_detail[:, 1:])
     exposure = delta[..., :min(3, frames.shape[-1])].mean((-3, -2)).abs().mean(-1)
+    frame_contrast = sequence[..., :min(3, frames.shape[-1])].std((-3, -2), correction=0)
+    contrast_steps = (frame_contrast[:, 1:] - frame_contrast[:, :-1]).abs().mean(-1)
     scale = options.fps / 24.0
     # A camera move in the middle of the clip must not excuse a cut between
     # settled endpoints. Reference actual original motion next to each junction.
-    def transition_reference(values, global_reference):
+    def transition_reference(values):
         left = values[:, :2].amax(1)
         right = values[:, -2:].amax(1)
         # Use the quieter side throughout. Interpolating these scalar tolerances
         # would excuse a cut inside a K=2 bridge when the head starts moving.
         reference = torch.minimum(left, right)[:, None]
-        return torch.minimum(reference, global_reference)
+        return reference
 
-    step_reference = transition_reference(step, baseline[0])
-    color_reference = transition_reference(exposure, baseline[1])
+    step_reference = transition_reference(step)
+    color_reference = transition_reference(exposure)
+    contrast_reference = transition_reference(contrast_steps)
     # For inclusive endpoints, two acceleration samples at each end are still
     # original. K=0/1 only have one untouched sample at each end. Never include
     # a seam-affected sample in its own tolerance.
     left_accel = accel[:, :2].amax(1) if k >= 2 else accel[:, 0]
     right_accel = accel[:, -2:].amax(1) if k >= 2 else accel[:, -1]
-    accel_reference = torch.minimum(torch.minimum(left_accel, right_accel), baseline[2])[:, None]
+    accel_reference = torch.minimum(left_accel, right_accel)[:, None]
     # Inclusive K>=2 endpoints leave the incoming/outgoing source pairs intact;
     # only internal bridge pairs are newly constructed. K=0/1 change both links.
     changed_steps = step[:, 3:-3] if k >= 2 else step[:, 2:-2]
     changed_exposure = exposure[:, 3:-3] if k >= 2 else exposure[:, 2:-2]
+    changed_contrast = contrast_steps[:, 3:-3] if k >= 2 else contrast_steps[:, 2:-2]
     appearance = _temporal_peak((changed_steps - step_reference * 1.5).clamp_min(0)) * scale
     color = _temporal_peak((changed_exposure - color_reference * 1.5).clamp_min(0)) * scale
+    contrast = _temporal_peak((changed_contrast - contrast_reference * 1.5).clamp_min(0)) * scale
     changed_accel = accel[:, 2:-2] if k >= 2 else accel[:, 1:-1]
     motion = _temporal_peak((changed_accel - accel_reference * 1.5).clamp_min(0)) * scale ** 2
     smoothness = (step[:, 1:] - step[:, :-1]).abs()[:, 1:-1].amax(1) * scale
@@ -323,57 +346,26 @@ def _score_batch(frames, edges, candidates, n, options, baseline, motion_prefix,
             tail_ix, head_ix = lookup[tail_ix], lookup[head_ix]
         t, h = frames[tail_ix], frames[head_ix]
         e = torch.maximum(edges[tail_ix], edges[head_ix])
+        t, h = _match_pair_tone(t, h)
         mismatch = _region_error((t - h).abs().mean(-1), e)
         # Edges live in normalized image coordinates, not raw proxy pixel units.
-        edge_error = (edges[tail_ix] - edges[head_ix]).abs()
+        edge_error = (_edges(t) - _edges(h)).abs()
         edge_error = _region_error(edge_error, e) * max(frames.shape[1:3]) / 96
         w = blend_weights(k, device)[None, :]
         ghost = _temporal_peak((mismatch + 0.25 * edge_error) * (4 * w * (1 - w)))
     duration = (n - count).float() / n
     fade = torch.full_like(duration, k / n)
-    retained_motion = motion_prefix[n - b - 1] - motion_prefix[a]
-    activity_loss = (1 - retained_motion / motion_prefix[-1].clamp_min(1e-6) - (a + b).float() / n).clamp_min(0)
-    activity_loss = torch.where(motion_prefix[-1] > 1e-6, activity_loss, 0)
-    # A single corrupt exposure frame must not be treated as indispensable action.
-    # Scale relative lost activity by robust ordinary motion, in pixel units.
-    activity_loss = activity_loss * baseline[0] * scale
-    metrics = torch.stack((appearance, color, motion, smoothness, ghost, duration, fade, activity_loss), 1)
+    # Retain the existing report key; the endpoint-only objective no longer uses
+    # whole-clip activity. Retention constraints and duration still protect length.
+    activity_loss = torch.zeros_like(duration)
+    metrics = torch.stack((appearance, color, motion, smoothness, ghost, duration, fade, activity_loss, contrast), 1)
     weights = torch.tensor([options.appearance_weight, options.exposure_weight, options.motion_weight,
                             options.smoothness_weight, options.ghosting_weight, options.duration_weight,
-                            options.fade_weight, options.duration_weight], device=device)
+                            options.fade_weight, options.duration_weight, options.exposure_weight], device=device)
     return (metrics * weights).sum(1), metrics
 
 
-def _baseline(frames, edges, source_indices=None):
-    if len(frames) == 1:
-        return torch.zeros(3, device=frames.device), torch.zeros(1, device=frames.device)
-    if source_indices is None:
-        delta = frames[1:] - frames[:-1]
-        detail = torch.maximum(edges[1:], edges[:-1]) + delta.abs().mean(-1)
-        accel_positions = list(range(len(delta) - 1))
-    else:
-        pairs = [i for i in range(len(source_indices) - 1) if source_indices[i + 1] == source_indices[i] + 1]
-        if not pairs:
-            return torch.zeros(3, device=frames.device), torch.zeros(1, device=frames.device)
-        p = torch.tensor(pairs, device=frames.device)
-        delta = frames[p + 1] - frames[p]
-        detail = torch.maximum(edges[p + 1], edges[p]) + delta.abs().mean(-1)
-        accel_positions = [i for i in range(len(pairs) - 1) if pairs[i + 1] == pairs[i] + 1]
-    step = _region_error(delta.abs().mean(-1), detail)
-    exposure = delta[..., :min(3, frames.shape[-1])].mean((-3, -2)).abs().mean(-1)
-    if accel_positions:
-        p = torch.tensor(accel_positions, device=frames.device)
-        accel = _region_error((delta[p + 1] - delta[p]).abs().mean(-1), detail[p + 1])
-    else:
-        accel = step.new_zeros(1)
-    # Upper quartiles tolerate ordinary motion in clips with long pauses without
-    # letting one corrupt exposure frame define "normal" motion/color change.
-    baseline = torch.stack((torch.quantile(step, 0.75), torch.quantile(exposure, 0.75), torch.quantile(accel, 0.75)))
-    prefix = torch.cat((step.new_zeros(1), step.cumsum(0)))
-    return baseline, prefix
-
-
-def _score_candidates(frames, candidates, n, options, baseline, prefix, chunk, check_interrupt, on_progress=None, lookup=None):
+def _score_candidates(frames, candidates, n, options, chunk, check_interrupt, on_progress=None, lookup=None):
     edges = _edges(frames)
     ordered = sorted(enumerate(candidates), key=lambda item: item[1].overlap)
     scores = torch.empty(len(candidates), device=frames.device)
@@ -385,7 +377,7 @@ def _score_candidates(frames, candidates, n, options, baseline, prefix, chunk, c
             if check_interrupt:
                 check_interrupt()
             batch = group[offset:offset + chunk]
-            s, m = _score_batch(frames, edges, [c for _, c in batch], n, options, baseline, prefix, lookup)
+            s, m = _score_batch(frames, edges, [c for _, c in batch], n, options, lookup)
             indices = torch.tensor([i for i, _ in batch], device=frames.device)
             scores[indices], metrics[indices] = s, m
             done += len(batch)
@@ -470,15 +462,17 @@ def _search(images, options, device, candidates, chunk, render_chunk, output_dev
     timings = {}
     _sync(device)
     start = time.perf_counter()
-    proxy = _proxy(images, small_size, device, render_chunk, check_interrupt)
+    indices = _boundary_indices(candidates, n)
+    proxy = _proxy(images, small_size, device, render_chunk, check_interrupt, indices)
+    lookup = torch.full((n,), -1, dtype=torch.long, device=device)
+    lookup[torch.tensor(indices, device=device)] = torch.arange(len(indices), device=device)
     _sync(device)
     timings["proxy_and_transfer_seconds"] = time.perf_counter() - start
     start = time.perf_counter()
-    baseline, prefix = _baseline(proxy, _edges(proxy))
     def search_progress(done, total):
         if on_progress:
             on_progress(10 + int(55 * done / total), 100)
-    scores, _ = _score_candidates(proxy, candidates, n, options, baseline, prefix, chunk, check_interrupt, search_progress)
+    scores, _ = _score_candidates(proxy, candidates, n, options, chunk, check_interrupt, search_progress, lookup)
     # A single batched synchronization for shortlist selection, never per candidate.
     score_values = scores.cpu().tolist()
     rank = sorted(range(len(candidates)), key=lambda i: (score_values[i], candidates[i]))
@@ -492,7 +486,7 @@ def _search(images, options, device, candidates, chunk, render_chunk, output_dev
     for i in satisfactory[:top_count]:
         if candidates[i] not in shortlist:
             shortlist.append(candidates[i])
-    del scores, proxy
+    del scores, proxy, lookup
     _sync(device)
     timings["search_seconds"] = time.perf_counter() - start
     start = time.perf_counter()
@@ -500,15 +494,7 @@ def _search(images, options, device, candidates, chunk, render_chunk, output_dev
     refined = _proxy(images, refine_size, device, render_chunk, check_interrupt, indices)
     lookup = torch.full((n,), -1, dtype=torch.long, device=device)
     lookup[torch.tensor(indices, device=device)] = torch.arange(len(indices), device=device)
-    # Normalize against reference statistics at the refinement resolution, too.
-    # Add uniformly sampled original frames to capture normal temporal behavior.
-    sample_start = sorted(set(round(i * max(0, n - 3) / 15) for i in range(16)))
-    ref_indices = sorted(set(j for i in sample_start for j in range(i, min(i + 3, n))))
-    reference = _proxy(images, refine_size, device, render_chunk, check_interrupt, ref_indices)
-    # Use only consecutive source pairs/triples, not jumps between samples.
-    baseline, _ = _baseline(reference, _edges(reference), ref_indices)
-    del reference
-    refined_scores, metrics = _score_candidates(refined, shortlist, n, options, baseline, prefix,
+    refined_scores, metrics = _score_candidates(refined, shortlist, n, options,
                                                 max(1, chunk // 4), check_interrupt, lookup=lookup)
     rows = torch.cat((refined_scores[:, None], metrics), 1).cpu().tolist()
     _sync(device)
@@ -539,9 +525,10 @@ def _search(images, options, device, candidates, chunk, render_chunk, output_dev
               "input_frames": n, "output_frames": n - selected.trim_start - selected.trim_end - selected.overlap,
               "fps": options.fps, "input_duration_seconds": n / options.fps,
               "blend_space": options.blend_space, "proxy_long_edge": small_size, "refine_long_edge": refine_size,
-              "options": asdict(options), "objective_version": 2, "optical_flow": "not used; temporal difference heuristic"}
+              "options": asdict(options), "objective_version": 3, "scoring_scope": "candidate boundary windows only",
+              "optical_flow": "not used; temporal difference heuristic"}
     report["output_duration_seconds"] = report["output_frames"] / options.fps
-    del refined, refined_scores, metrics, lookup, prefix
+    del refined, refined_scores, metrics, lookup
     if on_progress:
         on_progress(85, 100)
     start = time.perf_counter()

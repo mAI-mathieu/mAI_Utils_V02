@@ -1,6 +1,7 @@
 """Independent synthetic ground truths; no ComfyUI runtime or video codecs."""
 
 from dataclasses import replace
+from itertools import product
 import json
 from pathlib import Path
 import subprocess
@@ -97,14 +98,122 @@ def test_bad_exposure_frame_can_be_trimmed_without_fading():
 
 
 def score_candidates(x, candidates, opts):
-    baseline, prefix = loop._baseline(x, loop._edges(x))
-    return loop._score_candidates(x, candidates, len(x), opts, baseline, prefix, 4, None)
+    return loop._score_candidates(x, candidates, len(x), opts, 4, None)
 
 
 def test_exposure_discontinuity_is_visible_in_color_metric():
     x = torch.linspace(0.1, 0.9, 16)[:, None, None, None].expand(16, 12, 18, 3)
     _, metrics = score_candidates(x, [loop.LoopCandidate()], options())
     assert metrics[0, loop.METRICS.index("exposure")] > 0.5
+
+
+def contrast_texture():
+    checker = ((torch.arange(12)[None, :] + torch.arange(8)[:, None]) % 2).float()
+    return (checker * 0.24 + 0.38)[..., None].expand(8, 12, 3)
+
+
+def test_equal_mean_contrast_jump_is_reported_and_fading_reduces_it():
+    base = contrast_texture()
+    x = base[None].expand(16, -1, -1, -1).clone()
+    x[-8:] = 0.5 + (base - 0.5) * 2
+    _, metrics = score_candidates(x, [loop.LoopCandidate(), loop.LoopCandidate(0, 0, 3)], options())
+    assert metrics[0, loop.METRICS.index("exposure")] == pytest.approx(0, abs=1e-6)
+    assert metrics[0, loop.METRICS.index("contrast")] == pytest.approx(0.12, abs=1e-6)
+    # Known .24 -> .18 -> .12 contrast levels in the actual three-frame bridge.
+    result = loop.render_cycle(x, loop.LoopCandidate(0, 0, 3))
+    window = torch.cat((result[-4:], result[:1]))
+    levels = window.std((1, 2), correction=0).mean(-1)
+    assert (levels[1:] - levels[:-1]).abs().max() == pytest.approx(0.06, abs=1e-6)
+    # Gain-only blending introduces no second contour or displaced object.
+    assert metrics[1, loop.METRICS.index("ghosting")] == pytest.approx(0, abs=1e-6)
+
+
+def test_first_frame_contrast_flash_can_be_trimmed():
+    base = contrast_texture()
+    x = base[None].expand(40, -1, -1, -1).clone()
+    x[0] = 0.5 + (base - 0.5) * 2.5
+    result, report = loop.optimize_loop(x, options(max_trim_start=1, max_trim_end=0))
+    assert report["selected"] == {"trim_start": 1, "trim_end": 0, "overlap": 0}
+    torch.testing.assert_close(result, base[None].expand(39, -1, -1, -1))
+
+
+def test_tone_matching_only_changes_scoring_and_preserves_alpha():
+    base = torch.rand(3, 8, 12, 4, generator=torch.Generator().manual_seed(17))
+    tail, head = base.clone(), base.clone()
+    tail[..., :3] = 0.4 + (base[..., :3] - 0.5) * 0.6
+    head[..., :3] = 0.6 + (base[..., :3] - 0.5) * 0.3
+    t_original, h_original = tail.clone(), head.clone()
+    t, h = loop._match_pair_tone(tail, head)
+    torch.testing.assert_close(t, h, atol=1e-6, rtol=1e-5)
+    torch.testing.assert_close(t[..., 3], base[..., 3])
+    torch.testing.assert_close(tail, t_original)
+    torch.testing.assert_close(head, h_original)
+    rendered = loop.blend_frames(tail, head, torch.tensor(0.5))
+    torch.testing.assert_close(rendered, (t_original + h_original) / 2)
+
+
+@pytest.mark.parametrize("quality", ["fast", "balanced", "high"])
+def test_same_endpoints_give_same_scores_and_choice_despite_different_middle(quality):
+    x = periodic_clip(64)
+    other = x.clone()
+    other[20:44] = torch.rand(other[20:44].shape, generator=torch.Generator().manual_seed(19))
+    opts = options(quality=quality, max_trim_start=3, max_trim_end=4, max_fade=5)
+    candidates = loop.enumerate_candidates(len(x), opts)
+    first_scores, first_metrics = score_candidates(x, candidates, opts)
+    second_scores, second_metrics = score_candidates(other, candidates, opts)
+    torch.testing.assert_close(first_scores, second_scores, atol=0, rtol=0)
+    torch.testing.assert_close(first_metrics, second_metrics, atol=0, rtol=0)
+    _, first = loop.optimize_loop(x, opts)
+    _, second = loop.optimize_loop(other, opts)
+    assert first["selected"] == second["selected"]
+    assert first["metrics"] == second["metrics"]
+    assert first["score"] == second["score"]
+
+
+def test_search_only_creates_boundary_proxies(monkeypatch):
+    x = periodic_clip(64)
+    opts = options(max_trim_start=3, max_trim_end=4, max_fade=5)
+    calls = []
+    original = loop._proxy
+    def capture(images, size, device, chunk, check_interrupt, indices=None):
+        calls.append(indices)
+        return original(images, size, device, chunk, check_interrupt, indices)
+    monkeypatch.setattr(loop, "_proxy", capture)
+    _, report = loop.optimize_loop(x, opts)
+    assert len(calls) == 2  # Coarse boundary cache and shortlisted refinement.
+    assert calls[0] == loop._boundary_indices(loop.enumerate_candidates(len(x), opts), len(x))
+    for indices in calls:
+        assert indices is not None and set(indices).isdisjoint(range(20, 44))
+    assert report["scoring_scope"] == "candidate boundary windows only"
+
+
+def test_every_start_end_pair_and_fade_length_is_searched():
+    opts = options(max_trim_start=3, max_trim_end=4, max_fade=5)
+    actual = set(loop.enumerate_candidates(64, opts))
+    expected = {loop.LoopCandidate(a, b, k) for a, b, k in product(range(4), range(5), range(6))}
+    assert actual == expected
+
+
+def test_joint_pair_search_finds_known_clean_start_and_end():
+    x = torch.full((40, 8, 12, 3), 0.2)
+    x[0], x[1], x[-1] = 0.8, 0.5, 0.6
+    result, report = loop.optimize_loop(x, options(max_trim_start=3, max_trim_end=4, max_fade=5))
+    assert report["selected"] == {"trim_start": 2, "trim_end": 1, "overlap": 0}
+    torch.testing.assert_close(result, torch.full((37, 8, 12, 3), 0.2))
+
+
+def test_fade_length_adapts_to_endpoint_discontinuity():
+    overlaps = []
+    for difference in (0.02, 0.08):
+        x = torch.full((120, 8, 12, 3), 0.2)
+        x[-20:] += difference
+        result, report = loop.optimize_loop(x, options(max_trim_start=0, max_trim_end=0, max_fade=12))
+        k = report["selected"]["overlap"]
+        overlaps.append(k)
+        window = torch.cat((result[-k - 2:], result[:2]))
+        # Actual sample jumps shrink; the stronger mismatch gets more fade time.
+        assert (window[1:] - window[:-1]).abs().max() < difference / 2
+    assert 0 < overlaps[0] < overlaps[1] <= 12
 
 
 def test_motion_direction_change_detected_despite_identical_endpoints():
@@ -138,10 +247,9 @@ def quiet_endpoints_with_busy_middle():
 
 def test_busy_middle_cannot_excuse_quiet_endpoint_jump():
     x = quiet_endpoints_with_busy_middle()
-    baseline, _ = loop._baseline(x, loop._edges(x))
     _, metrics = score_candidates(x, [loop.LoopCandidate()], options())
     # The old whole-clip quartile subtracts away this localized discontinuity.
-    assert baseline[0] > 0.3
+    assert (x[9:52] - x[8:51]).abs().mean() > 0.1
     assert metrics[0, loop.METRICS.index("appearance")] > 0.1
     assert metrics[0, loop.METRICS.index("motion")] > 0.1
 
@@ -152,7 +260,7 @@ def test_busy_middle_repair_reduces_actual_transition_jump(quality):
     result, report = loop.optimize_loop(x, options(quality=quality, max_trim_start=0, max_trim_end=0))
     k = report["selected"]["overlap"]
     assert k > 0 and report["selection"] != "unchanged_satisfactory"
-    assert report["objective_version"] == 2
+    assert report["objective_version"] == 3
     # Independent pixel differences across all bridge links, including repeat.
     window = torch.cat((result[-k - 3:], result[:3]))
     repaired_jump = (window[1:] - window[:-1]).abs().amax()
@@ -375,8 +483,7 @@ def test_refinement_windows_match_actual_rendered_cycle():
         lookup = torch.full((len(x),), -1, dtype=torch.long)
         lookup[torch.tensor(ix)] = torch.arange(len(ix))
         full_s, full_m = score_candidates(x, [c], options())
-        baseline, prefix = loop._baseline(x, loop._edges(x))
-        sparse_s, sparse_m = loop._score_candidates(x[ix], [c], len(x), options(), baseline, prefix, 2, None, lookup=lookup)
+        sparse_s, sparse_m = loop._score_candidates(x[ix], [c], len(x), options(), 2, None, lookup=lookup)
         torch.testing.assert_close(full_s, sparse_s)
         torch.testing.assert_close(full_m, sparse_m)
 
@@ -384,7 +491,6 @@ def test_refinement_windows_match_actual_rendered_cycle():
 @pytest.mark.parametrize("candidate", [loop.LoopCandidate(1, 1, k) for k in (0, 1, 3, 4)])
 def test_scored_transition_really_includes_rendered_wraparound(monkeypatch, candidate):
     x = torch.rand(12, 3, 5, 3, generator=torch.Generator().manual_seed(9))
-    baseline, prefix = loop._baseline(x, loop._edges(x))
     source_edges = loop._edges(x)
     captured = []
     original_edges = loop._edges
@@ -392,7 +498,7 @@ def test_scored_transition_really_includes_rendered_wraparound(monkeypatch, cand
         captured.append(frames.clone())
         return original_edges(frames)
     monkeypatch.setattr(loop, "_edges", capture)
-    loop._score_batch(x, source_edges, [candidate], len(x), options(), baseline, prefix)
+    loop._score_batch(x, source_edges, [candidate], len(x), options())
     cycle = loop.render_cycle(x, candidate)
     k = candidate.overlap
     junction = len(x) - candidate.trim_start - candidate.trim_end - 2 * k if k else len(cycle)

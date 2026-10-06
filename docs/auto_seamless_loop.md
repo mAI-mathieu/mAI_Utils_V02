@@ -71,14 +71,23 @@ conversion and downsampling do not commute exactly.
 Every valid integer triple `(a,b,K)` is searched jointly, including unchanged and
 all valid zero-fade choices. This is an exhaustive bounded **proxy** grid followed
 by a shortlist refinement, not a guarantee of the global full-resolution optimum.
+Every start trim `a=0..max_trim_start` is paired with every end trim
+`b=0..max_trim_end`. For each pair, score every overlap `K=0..max_fade` that
+respects retention and `L>=2K+1`. For example, trim bounds 3/4 and fade bound 5
+produce 4 x 5 x 6 = 120 candidates when the clip is long enough. The selected
+overlap responds to the endpoint mismatch and resulting transition; it is not
+fixed, nor chosen solely by comparing individual first/last images.
 
 Stage 1 uses aspect-preserving area proxies with long edge 64 / 96 / 128 for
 fast / balanced / high, without upscaling. Candidates are grouped by K and scored
 in tensor batches. Stage 2 uses original boundary frames at long edge 128 / 256 /
 384 and RGB information; refine the top 4 / 8 / 16, unchanged if permitted, plus
-the cheapest satisfactory repairs (at most another 4 / 8 / 16). Reference quartiles
-are recomputed from consecutive pairs/triples around 16 uniformly sampled starts.
-Only these needed boundary/reference frames are resized for refinement.
+the cheapest satisfactory repairs (at most another 4 / 8 / 16). Both stages resize
+only the union of source frames needed for their candidate boundary windows.
+There is no middle-of-clip reference sampling or visual activity scan. Normal
+input validation still checks every frame, and rendering copies the retained
+middle without changing its pixels. Large configured trim/fade bounds can make
+the union span much of a short clip.
 
 Each candidate supplies the **actual constructed** periodic window: three frames
 before the bridge, its K frames, and three after. For zero fade use three frames
@@ -96,14 +105,14 @@ proxy resolution, textureless subjects, occlusions and arbitrary alpha can fool 
 
 Let d be signed adjacent-frame differences, u the corresponding R(abs(d)),
 v the R(abs(d[t+1]-d[t])), e the absolute per-channel mean of d, and
-`P(z)=.75*max(z)+.25*mean(z)` over the affected samples. Let r=fps/24, and q_u, q_e, q_v
-be robust upper quartiles over original consecutive frame differences/accelerations.
-In **objective version 2**, these quartiles cap local reference levels rather
-than directly excusing every boundary error. For u/e, take the maximum of the
+z the mean absolute change in spatial per-color-channel population standard
+deviation (contrast). Let `P(q)=.75*max(q)+.25*mean(q)` over the affected samples
+and r=fps/24. In **objective version 3**, all reference levels are local.
+For u/e/z, take the maximum of the
 two original pairs before the transition and the two after it, then use the
-minimum of the two sides and the corresponding quartile. Call these c_u/c_e.
+minimum of the two sides. Call these c_u/c_e/c_z.
 For v, take the maximum original acceleration on each side (two untouched
-samples for K>=2, one for K=0/1), then the minimum of both sides and q_v: c_v.
+samples for K>=2, one for K=0/1), then the minimum of both sides: c_v.
 Strong activity in the middle cannot establish a large tolerance at quiet ends,
 and a faster-moving head cannot excuse a cut inside a two-frame overlap.
 
@@ -116,25 +125,40 @@ without being included in its own discontinuity penalty. The reported metrics ar
 |---|---|---:|
 | appearance | `P(max(0,u-1.5*c_u))*r` on changed pairs | 1.0 |
 | exposure | `P(max(0,e-1.5*c_e))*r` on changed pairs | 0.5 |
+| contrast | `P(max(0,z-1.5*c_z))*r` on changed pairs | exposure weight (0.5) |
 | motion | `P(max(0,v-1.5*c_v))*r^2` on affected accelerations | 0.6 |
 | smoothness | `max(abs(u[t+1]-u[t]))*r` next to the transition | 0.4 |
-| ghosting | P of tail/head regional mismatch plus 0.25 edge mismatch, times `4*w*(1-w)` | 1.0 |
+| ghosting | P of tone-matched tail/head structural mismatch plus 0.25 edge mismatch, times `4*w*(1-w)` | 1.0 |
 | duration | `(N-Nout)/N` | 0.25 |
 | fade | `K/N` | 0.12 |
-| activity_loss | excess proportion of original step activity removed by trims, times `q_u*r` | duration weight |
+| activity_loss | legacy report key, always zero in the endpoint-only objective | inactive |
+
+Contrast detects a gain/contrast flash even when mean brightness remains equal.
+It uses spatial RGB standard deviation, not semantic segmentation or a histogram
+model; arbitrary nonlinear tone curves are only approximated. The existing
+`exposure_weight` controls both exposure and contrast without adding a widget.
+
+For ghost scoring only, each tail/head color channel is centered by its own mean
+and scaled to the lower of the two standard deviations, dividing by at least
+1e-6. This compares structure without treating pure brightness/gain differences
+as doubled objects. Lower shared contrast avoids amplifying flat-image noise.
+Additional channels remain untouched. The actual rendered bridge always uses
+the original color values and configured blend space.
 
 Ghost edge differences are scaled by proxy long edge / 96 to use normalized image
 coordinates. Spatial reductions are means/weighted means, not resolution-dependent
 sums. Temporal peak and mean have fixed contributions, so adding bridge frames
 cannot dilute a bad connection. First/second temporal derivatives scale with frame
 rate / squared frame rate. Pixel errors are in the input's `[0,1]` units; every
-metric is nonnegative and the final score is their weighted sum. Activity loss uses
-stage-1 activity prefix sums and refinement q_u; a one-frame exposure outlier is
-not treated as essential action when normal motion is zero. It is approximate
-activity retention, not semantic usefulness. Timing and score changes across
+metric is nonnegative and the final score is their weighted sum. Retention limits
+and duration penalties protect the useful middle without inspecting its activity.
+Timing and score changes across
 quality levels are expected; this is not a perceptually calibrated metric.
 Version 1 used whole-clip quartiles directly, which could incorrectly mark a
-small pose/framing jump as satisfactory after a larger camera move. Scores from
+small pose/framing jump as satisfactory after a larger camera move. Version 2
+capped local references with clip-wide quartiles and retained an activity penalty;
+version 3 removes both dependencies and adds contrast and tone-matched ghosting.
+Scores from
 different objective versions are not directly comparable.
 
 Selection is explicitly satisficing: unchanged wins when its refined score meets
@@ -142,7 +166,7 @@ the threshold. Otherwise, among satisfactory refined choices minimize total lost
 frames `a+b+K`, then K, then score. If none is satisfactory select the lowest
 refined score and report **low confidence**. Report near ties within tie tolerance,
 including alternatives with lower scores when a cheaper satisfactory repair wins.
-Duration/activity/fade penalties discourage excessive trimming, static subsequence
+Duration/fade penalties and retention constraints discourage excessive trimming, static subsequence
 selection, and long fades. For demanding cases reduce satisfactory_score, adjust
 weights, or override the dimensions. High mode increases proxy/refine resolution
 and shortlist size; no optical-flow backend is installed or used.
@@ -232,8 +256,8 @@ identified image batch was supplied/found inside this repository, so the suggest
 
 ### Local verification, 2026-10-06
 
-Full suite after the scoring fix: **1,145 passed, 14 skipped**, including
-**66 focused loop tests**.
+Full suite after the endpoint-only update: **1,155 passed, 14 skipped**, including
+**76 focused loop tests**.
 The new node and existing registrations import together; frontend and deployment
 sources passed syntax checks, and example socket/widget wiring is tested. Full
 ComfyUI GUI playback was not performed. The host's standalone Python environment
@@ -243,7 +267,7 @@ are not a claim that its venv ran the test suite. Installed ComfyUI source APIs
 were inspected directly. No core files or existing node contracts were changed.
 
 Initial objective-version-1 isolated-process benchmarks (two warm runs; host
-default 24 CPU threads; these historical timings were not rerun for version 2):
+default 24 CPU threads; these historical timings were not rerun for versions 2/3):
 
 | Case | Candidates | Warm search | Warm refinement + transfers | Warm render + transfers | Warm end-to-end |
 |---|---:|---:|---:|---:|---:|
@@ -282,16 +306,27 @@ by these synthetic tests. See deployment examples and verification notes in
 
 The supplied output MP4 was also decoded and tested at its original 912x1600
 resolution: 121 frames at 24 FPS. Its saved report had accepted all frames
-unchanged. With objective version 2, balanced mode selected trims 0/5 and K=0,
+unchanged. With objective versions 2 and 3, balanced mode selected trims 0/5 and K=0,
 retaining 116 frames (4.833 seconds), with **uncertain** confidence. This verifies
 the incorrect unchanged decision is corrected; it does not certify a visually
 seamless result. No source video, personal path, or video decoding dependency is
 included in the package. Audio was excluded from the development preview because
 shortening changes alignment.
+Version 3 was rerun on the full-resolution source with all 1,053 valid default
+start/end/fade combinations on the RTX 5090. Its report explicitly records
+`scoring_scope="candidate boundary windows only"`, separate contrast, and zero
+legacy activity loss. The same selected trims do not imply the two objectives
+give identical scores or that the residual cut is visually resolved.
 
 New synthetic regressions cover strong interior activity hiding a quiet localized
 endpoint offset, reduced actual bridge pixel jumps, and a two-frame cut borrowing
 tolerance from faster head motion. Fast proxies can still miss subtle details.
+Version 3 also verifies identical scores and selections when only unrelated middle
+frames change (all quality levels), boundary-only proxy creation, exhaustive
+start/end/fade pairing, a known clean pair, equal-mean contrast flashes, tone-only
+ghost exclusion, unchanged rendering/alpha, and fade length increasing with a
+stronger boundary discontinuity. These tests check independent pixel/contrast
+changes rather than only asserting a lower internal score.
 For a visible residual cut, try advanced manual overlap 1 (one midpoint frame) or
 3/4 (a short mixed bridge); overlap 2 is a cut with endpoint trimming. These are
 crossfades, so displaced faces/hands may ghost. The node does not perform optical
