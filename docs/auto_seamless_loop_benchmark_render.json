@@ -1,0 +1,147 @@
+{
+  "fixture": "seed 7 translating random RGB texture",
+  "shape": [
+    16,
+    720,
+    1280,
+    3
+  ],
+  "options": {
+    "device": "cuda",
+    "quality": "balanced",
+    "frames": 16,
+    "height": 720,
+    "width": 1280,
+    "runs": 2,
+    "max_trim": 0,
+    "max_fade": 4,
+    "manual_overlap": 4,
+    "input_tensor": null,
+    "output": "docs\\auto_seamless_loop_benchmark_render.json"
+  },
+  "cpu_threads": 24,
+  "records": [
+    {
+      "run": "cold",
+      "timings": {
+        "proxy_and_transfer_seconds": 0.007056899994495325,
+        "search_seconds": 4.478832200009492,
+        "refinement_and_transfer_seconds": 0.04342250000627246,
+        "render_and_transfer_seconds": 0.030276100005721673,
+        "device_initialization_seconds": 10.728767199994763,
+        "end_to_end_seconds": 15.292885500006378
+      },
+      "selected": {
+        "trim_start": 0,
+        "trim_end": 0,
+        "overlap": 4
+      },
+      "candidate_count": 1,
+      "output_frames": 12,
+      "backend": {
+        "torch_version": "2.7.1+cu128",
+        "cuda_runtime": "12.8",
+        "gpu_name": "NVIDIA GeForce RTX 5090",
+        "capability": [
+          12,
+          0
+        ],
+        "smoke_test": {
+          "passed": true,
+          "value": 1640.0,
+          "operation": "fp32 square, reduction, matmul"
+        },
+        "fallback_reason": null,
+        "selected_device": "cuda:0",
+        "output_device": "cpu",
+        "attempts": [],
+        "candidate_chunk": 13,
+        "render_chunk": 2
+      }
+    },
+    {
+      "run": "warm_1",
+      "timings": {
+        "proxy_and_transfer_seconds": 0.00547460000962019,
+        "search_seconds": 0.004899799998383969,
+        "refinement_and_transfer_seconds": 0.023959500002092682,
+        "render_and_transfer_seconds": 0.026828999994904734,
+        "device_initialization_seconds": 0.0006596000021090731,
+        "end_to_end_seconds": 0.06544180000491906
+      },
+      "selected": {
+        "trim_start": 0,
+        "trim_end": 0,
+        "overlap": 4
+      },
+      "candidate_count": 1,
+      "output_frames": 12,
+      "backend": {
+        "torch_version": "2.7.1+cu128",
+        "cuda_runtime": "12.8",
+        "gpu_name": "NVIDIA GeForce RTX 5090",
+        "capability": [
+          12,
+          0
+        ],
+        "smoke_test": {
+          "passed": true,
+          "value": 1640.0,
+          "operation": "fp32 square, reduction, matmul"
+        },
+        "fallback_reason": null,
+        "selected_device": "cuda:0",
+        "output_device": "cpu",
+        "attempts": [],
+        "candidate_chunk": 13,
+        "render_chunk": 2
+      }
+    },
+    {
+      "run": "warm_2",
+      "timings": {
+        "proxy_and_transfer_seconds": 0.005237200006376952,
+        "search_seconds": 0.003764299995964393,
+        "refinement_and_transfer_seconds": 0.024049900006502867,
+        "render_and_transfer_seconds": 0.025984199994127266,
+        "device_initialization_seconds": 0.0005268000095384195,
+        "end_to_end_seconds": 0.06297409998660441
+      },
+      "selected": {
+        "trim_start": 0,
+        "trim_end": 0,
+        "overlap": 4
+      },
+      "candidate_count": 1,
+      "output_frames": 12,
+      "backend": {
+        "torch_version": "2.7.1+cu128",
+        "cuda_runtime": "12.8",
+        "gpu_name": "NVIDIA GeForce RTX 5090",
+        "capability": [
+          12,
+          0
+        ],
+        "smoke_test": {
+          "passed": true,
+          "value": 1640.0,
+          "operation": "fp32 square, reduction, matmul"
+        },
+        "fallback_reason": null,
+        "selected_device": "cuda:0",
+        "output_device": "cpu",
+        "attempts": [],
+        "candidate_chunk": 13,
+        "render_chunk": 2
+      }
+    }
+  ],
+  "warm_median_seconds": {
+    "proxy_and_transfer_seconds": 0.005355900007998571,
+    "search_seconds": 0.004332049997174181,
+    "refinement_and_transfer_seconds": 0.024004700004297774,
+    "render_and_transfer_seconds": 0.026406599994516,
+    "device_initialization_seconds": 0.0005932000058237463,
+    "end_to_end_seconds": 0.06420794999576174
+  }
+}

@@ -1,0 +1,64 @@
+{
+  "last_node_id": 3,
+  "last_link_id": 4,
+  "nodes": [
+    {
+      "id": 1, "type": "MAIVideoLoader", "pos": [40, 100], "size": [260, 200],
+      "flags": {}, "order": 0, "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {"name": "frames", "type": "IMAGE", "links": [1], "slot_index": 0},
+        {"name": "fps", "type": "FLOAT", "links": [2], "slot_index": 1},
+        {"name": "audio", "type": "AUDIO", "links": null},
+        {"name": "frame_count", "type": "INT", "links": null},
+        {"name": "width", "type": "INT", "links": null},
+        {"name": "height", "type": "INT", "links": null}
+      ],
+      "properties": {"Node name for S&R": "MAIVideoLoader"},
+      "widgets_values": ["loop_input.mp4"]
+    },
+    {
+      "id": 2, "type": "MAIAutoSeamlessLoop", "pos": [360, 100], "size": [330, 370],
+      "flags": {}, "order": 1, "mode": 0,
+      "inputs": [
+        {"name": "images", "type": "IMAGE", "link": 1},
+        {"name": "fps", "type": "FLOAT", "link": 2, "widget": {"name": "fps"}}
+      ],
+      "outputs": [
+        {"name": "images", "type": "IMAGE", "links": [3], "slot_index": 0},
+        {"name": "fps", "type": "FLOAT", "links": [4], "slot_index": 1},
+        {"name": "frame_count", "type": "INT", "links": null},
+        {"name": "trim_start", "type": "INT", "links": null},
+        {"name": "trim_end", "type": "INT", "links": null},
+        {"name": "overlap", "type": "INT", "links": null},
+        {"name": "report", "type": "STRING", "links": null}
+      ],
+      "properties": {"Node name for S&R": "MAIAutoSeamlessLoop"},
+      "widgets_values": [24.0, "auto", "balanced", 8, 8, 12, 70.0, false, "srgb", 1.0, 0.5, 0.6, 0.4, 1.0, 0.25, 0.12, 0.025, 0.002, -1, -1, -1]
+    },
+    {
+      "id": 3, "type": "MAIGPUVideoCombine", "pos": [760, 100], "size": [350, 450],
+      "flags": {}, "order": 2, "mode": 0,
+      "inputs": [
+        {"name": "frames", "type": "IMAGE", "link": 3},
+        {"name": "frame_rate", "type": "FLOAT", "link": 4, "widget": {"name": "frame_rate"}},
+        {"name": "audio", "type": "AUDIO", "link": null}
+      ],
+      "outputs": [
+        {"name": "filenames", "type": "VHS_FILENAMES", "links": null},
+        {"name": "file_path", "type": "STRING", "links": null},
+        {"name": "frame_count", "type": "INT", "links": null},
+        {"name": "duration", "type": "FLOAT", "links": null}
+      ],
+      "properties": {"Node name for S&R": "MAIGPUVideoCombine"},
+      "widgets_values": [24.0, "video/auto_seamless_loop", "libx264", 18, "p4", false, 2, false, true, true, -1, 0]
+    }
+  ],
+  "links": [
+    [1, 1, 0, 2, 0, "IMAGE"], [2, 1, 1, 2, 1, "FLOAT"],
+    [3, 2, 0, 3, 0, "IMAGE"], [4, 2, 1, 3, 1, "FLOAT"]
+  ],
+  "groups": [], "config": {},
+  "extra": {"ds": {"scale": 1, "offset": [0, 0]}},
+  "version": 0.4
+}

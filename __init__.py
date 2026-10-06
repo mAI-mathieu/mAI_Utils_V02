@@ -1,3 +1,4 @@
+from .nodes.auto_seamless_loop import MAIAutoSeamlessLoop
 from .nodes.background_lighting_match import MAIBackgroundLightingMatch
 from .nodes.cinematic_post import mAI_CinematicPost
 from .nodes.composite_layer_node import MAICompositeLayer
@@ -41,6 +42,7 @@ except CropAndStitchDependencyError as exc:
         )
 
 NODE_CLASS_MAPPINGS = {
+    "MAIAutoSeamlessLoop": MAIAutoSeamlessLoop,
     "mAI_CinematicPost": mAI_CinematicPost,
     "MAIBackgroundLightingMatch": MAIBackgroundLightingMatch,
     "MAICompositeLayer": MAICompositeLayer,
@@ -67,6 +69,7 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
+    "MAIAutoSeamlessLoop": "mAI auto seamless loop",
     "mAI_CinematicPost": "mAI Cinematic Post",
     "MAIBackgroundLightingMatch": "mAI background lighting match",
     "MAICompositeLayer": "mAI Composite Layer",

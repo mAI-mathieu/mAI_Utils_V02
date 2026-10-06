@@ -1188,6 +1188,41 @@ Default behavior:
 * `strip_whitespace = true` removes leading and trailing whitespace.
 * `strip_whitespace = false` returns the input text unchanged.
 
+## mAI auto seamless loop
+
+Location: `mAI / Image`. Registered as `MAIAutoSeamlessLoop`.
+Automatically search beginning/end trims and overlap jointly for an ordered IMAGE
+batch. Tensor-only PyTorch operation; no encoder, downloaded model or extra dependency.
+
+Inputs: `images`, positive `fps` (24 by default), `device` (auto/cuda/cpu), `quality`
+(fast/balanced/high), `max_trim_start` (8), `max_trim_end` (8), `max_fade` (12), and
+`min_retained_percent` (70% of input, applied after overlap). Advanced controls
+expose score weights, sRGB/linear-light blending and manual trims/overlap (-1=auto).
+Missing optional controls use defaults. CPU/CUDA execution respects ComfyUI's
+device policy, supports progress/cancellation and reports bounded OOM fallback.
+
+Outputs, in order: `images`, `fps`, `frame_count`, `trim_start`, `trim_end`,
+`overlap`, `report` (JSON). The cycle is the unblended middle followed by the
+blended bridge; length is `N - trim_start - trim_end - overlap`, with exact duration
+in the report. FPS stays unchanged. Satisfactory unchanged clips retain all frames.
+
+Install this pack under `ComfyUI/custom_nodes`, restart ComfyUI, and load
+[the example workflow](examples/auto_seamless_loop.json); select a video from the
+input folder. Inspect the encoded repeats and connect `report` to a STRING viewer.
+The example uses existing IO nodes and software libx264; only those IO steps need
+video codecs. An existing generated IMAGE batch can connect directly to the node.
+
+The objective is a documented two-stage heuristic, not a guarantee of perceptual
+perfection. Tiny subjects, occlusions and motion may remain difficult; uncertain
+or poor results are reported. Default shortening/phase rotation does not preserve
+audio alignment. High mode uses larger proxies rather than optical flow.
+See [construction, scoring and controls](docs/auto_seamless_loop.md),
+[RunPod/Modal examples](deployment/auto_seamless_loop/README.md), and
+[benchmark utility](scripts/benchmark_seamless_loop.py). Run
+`python -m pytest tests/test_seamless_loop.py -q` for focused tests; CUDA cases skip
+on CPU hosts. RTX 5090 and CPU tested locally; RTX PRO 6000, B200/B300 and cloud
+deployments remain unverified on hardware.
+
 ## Testing
 
 Run the Python tests from this folder:

@@ -1,0 +1,135 @@
+{
+  "fixture": "seed 7 translating random RGB texture",
+  "shape": [
+    48,
+    180,
+    320,
+    3
+  ],
+  "options": {
+    "device": "cpu",
+    "quality": "balanced",
+    "frames": 48,
+    "height": 180,
+    "width": 320,
+    "runs": 2,
+    "max_trim": 8,
+    "max_fade": 12,
+    "manual_overlap": -1,
+    "input_tensor": null,
+    "output": "docs\\auto_seamless_loop_benchmark_cpu.json"
+  },
+  "cpu_threads": 24,
+  "records": [
+    {
+      "run": "cold",
+      "timings": {
+        "proxy_and_transfer_seconds": 0.0024271000002045184,
+        "search_seconds": 0.6344225999928312,
+        "refinement_and_transfer_seconds": 0.0654188000044087,
+        "render_and_transfer_seconds": 0.0012022000009892508,
+        "device_initialization_seconds": 1.2400007108226418e-05,
+        "end_to_end_seconds": 0.705071999997017
+      },
+      "selected": {
+        "trim_start": 0,
+        "trim_end": 0,
+        "overlap": 0
+      },
+      "candidate_count": 564,
+      "output_frames": 48,
+      "backend": {
+        "torch_version": "2.7.1+cu128",
+        "cuda_runtime": "12.8",
+        "gpu_name": null,
+        "capability": null,
+        "smoke_test": {
+          "passed": null,
+          "reason": "not requested"
+        },
+        "fallback_reason": null,
+        "selected_device": "cpu",
+        "output_device": "cpu",
+        "attempts": [],
+        "candidate_chunk": 7,
+        "render_chunk": 8
+      }
+    },
+    {
+      "run": "warm_1",
+      "timings": {
+        "proxy_and_transfer_seconds": 0.0016891000122996047,
+        "search_seconds": 0.6153847000095993,
+        "refinement_and_transfer_seconds": 0.061966100009158254,
+        "render_and_transfer_seconds": 0.0011652999965008348,
+        "device_initialization_seconds": 4.7000066842883825e-06,
+        "end_to_end_seconds": 0.6813031999918167
+      },
+      "selected": {
+        "trim_start": 0,
+        "trim_end": 0,
+        "overlap": 0
+      },
+      "candidate_count": 564,
+      "output_frames": 48,
+      "backend": {
+        "torch_version": "2.7.1+cu128",
+        "cuda_runtime": "12.8",
+        "gpu_name": null,
+        "capability": null,
+        "smoke_test": {
+          "passed": null,
+          "reason": "not requested"
+        },
+        "fallback_reason": null,
+        "selected_device": "cpu",
+        "output_device": "cpu",
+        "attempts": [],
+        "candidate_chunk": 7,
+        "render_chunk": 8
+      }
+    },
+    {
+      "run": "warm_2",
+      "timings": {
+        "proxy_and_transfer_seconds": 0.0017048000008799136,
+        "search_seconds": 0.6154868000012357,
+        "refinement_and_transfer_seconds": 0.06218930000613909,
+        "render_and_transfer_seconds": 0.0012244999961694703,
+        "device_initialization_seconds": 4.1000021155923605e-06,
+        "end_to_end_seconds": 0.6817298000096343
+      },
+      "selected": {
+        "trim_start": 0,
+        "trim_end": 0,
+        "overlap": 0
+      },
+      "candidate_count": 564,
+      "output_frames": 48,
+      "backend": {
+        "torch_version": "2.7.1+cu128",
+        "cuda_runtime": "12.8",
+        "gpu_name": null,
+        "capability": null,
+        "smoke_test": {
+          "passed": null,
+          "reason": "not requested"
+        },
+        "fallback_reason": null,
+        "selected_device": "cpu",
+        "output_device": "cpu",
+        "attempts": [],
+        "candidate_chunk": 7,
+        "render_chunk": 8
+      }
+    }
+  ],
+  "warm_median_seconds": {
+    "proxy_and_transfer_seconds": 0.0016969500065897591,
+    "search_seconds": 0.6154357500054175,
+    "refinement_and_transfer_seconds": 0.06207770000764867,
+    "render_and_transfer_seconds": 0.0011948999963351525,
+    "device_initialization_seconds": 4.4000043999403715e-06,
+    "end_to_end_seconds": 0.6815165000007255
+  }
+}
