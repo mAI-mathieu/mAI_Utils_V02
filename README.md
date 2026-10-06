@@ -1216,7 +1216,7 @@ The objective is a documented two-stage heuristic, not a guarantee of perceptual
 perfection. Tiny subjects, occlusions and motion may remain difficult; uncertain
 or poor results are reported. Default shortening/phase rotation does not preserve
 audio alignment. High mode uses larger proxies rather than optical flow.
-For clips already intended to loop, objective version 3 searches every permitted
+For clips already intended to loop, objective version 4 searches every permitted
 start/end trim pair and each valid overlap from zero through `max_fade`. Both
 scoring stages inspect only candidate boundary neighborhoods and the actual
 fade; the middle does not supply motion tolerances or an activity penalty.
@@ -1225,7 +1225,15 @@ and structural ghosting using an 8x8 detail grid. `exposure_weight` controls bot
 brightness/color and contrast. Ghost scoring compares structure at matched tone,
 so a lighting change alone is not treated as a doubled image; rendered colors
 are never automatically normalized. Retention and duration/fade penalties keep
-repairs short. The JSON reports `contrast`, `objective_version=3`, and the scoring
+repairs short. Unchanged wins only if satisfactory and within `tie_tolerance`
+of the best refined score. For equally short satisfactory repairs, prefer fewer
+fully discarded source frames; a cut no longer wins just because K is smaller.
+Ghosting measures the energy of the weaker mixed contour, so faint short blends
+are not charged almost the whole endpoint mismatch. Local region checks prevent
+overall endpoint motion from hiding a quiet subject's jump. Refinement includes
+representatives of all fade lengths for small ranges (including 0..12 in balanced),
+and evenly samples large ranges within a bounded budget.
+The JSON reports `contrast`, `objective_version=4`, `fade_comparison`, and the scoring
 scope; the existing `activity_loss` report key remains, fixed at zero.
 Fast mode can still miss subtle
 localized jumps; use balanced/high and inspect repeated playback. If automatic

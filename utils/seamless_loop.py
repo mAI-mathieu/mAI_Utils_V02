@@ -214,6 +214,41 @@ def _temporal_peak(values):
     return 0.75 * values.amax(1) + 0.25 * values.mean(1)
 
 
+def _local_excess(maps, values, context, changed):
+    """Detect a quiet-region jump that a scalar motion allowance can conceal.
+
+    Nearby motion can pass between regions, so either original side can support
+    a region's reference. Scale that support to the quieter side's overall rate.
+    """
+    b, t, h, w = maps.shape
+    tiles = F.adaptive_avg_pool2d(maps.reshape(-1, 1, h, w), (min(8, h), min(8, w))).reshape(b, t, -1)
+    left, right = values[:, :context].amax(1), values[:, -context:].amax(1)
+    factor = torch.minimum(left, right) / torch.maximum(left, right).clamp_min(1e-6)
+    reference = torch.maximum(tiles[:, :context].amax(1), tiles[:, -context:].amax(1)) * factor[:, None]
+    excess = (tiles[:, changed] - 1.5 * reference[:, None]).clamp_min(0).amax(-1)
+    return 0.3 * _temporal_peak(excess)
+
+
+def _fade_representatives(candidates, scores, top_count):
+    """Keep each fade length in a small search, sampling larger ranges evenly."""
+    best = {}
+    for candidate, score in zip(candidates, scores):
+        k = candidate.overlap
+        if k not in best or (score, candidate) < (best[k][0], best[k][1]):
+            best[k] = (score, candidate)
+    levels = sorted(best)
+    budget = 2 * top_count + 1
+    if len(levels) > budget:
+        levels = [levels[round(i * (len(levels) - 1) / (budget - 1))] for i in range(budget)]
+    return [best[k][1] for k in levels]
+
+
+def _discarded_frame_count(candidate):
+    # Inclusive K>=2 drops the first head and last tail completely. K=2 has
+    # no mixed frames, so it must be treated as a cut in preservation ties.
+    return candidate.trim_start + candidate.trim_end + (2 if candidate.overlap >= 2 else 0)
+
+
 def _proxy(images, size, device, chunk, check_interrupt, indices=None):
     h, w = images.shape[1:3]
     scale = min(1.0, size / max(h, w))
@@ -336,6 +371,12 @@ def _score_batch(frames, edges, candidates, n, options, lookup=None):
     contrast = _temporal_peak((changed_contrast - contrast_reference * 1.5).clamp_min(0)) * scale
     changed_accel = accel[:, 2:-2] if k >= 2 else accel[:, 1:-1]
     motion = _temporal_peak((changed_accel - accel_reference * 1.5).clamp_min(0)) * scale ** 2
+    pair_slice = slice(3, -3) if k >= 2 else slice(2, -2)
+    local_appearance = _local_excess(delta.abs().mean(-1), step, 2, pair_slice) * scale
+    appearance = torch.maximum(appearance, local_appearance)
+    accel_slice = slice(2, -2) if k >= 2 else slice(1, -1)
+    local_motion = _local_excess(acceleration.abs().mean(-1), accel, 2 if k >= 2 else 1, accel_slice) * scale ** 2
+    motion = torch.maximum(motion, local_motion)
     smoothness = (step[:, 1:] - step[:, :-1]).abs()[:, 1:-1].amax(1) * scale
     ghost = torch.zeros(len(candidates), device=device)
     if k:
@@ -347,12 +388,14 @@ def _score_batch(frames, edges, candidates, n, options, lookup=None):
         t, h = frames[tail_ix], frames[head_ix]
         e = torch.maximum(edges[tail_ix], edges[head_ix])
         t, h = _match_pair_tone(t, h)
-        mismatch = _region_error((t - h).abs().mean(-1), e)
+        mismatch = _region_error((t - h).square().mean(-1), e)
         # Edges live in normalized image coordinates, not raw proxy pixel units.
-        edge_error = (_edges(t) - _edges(h)).abs()
-        edge_error = _region_error(edge_error, e) * max(frames.shape[1:3]) / 96
+        edge_error = ((_edges(t) - _edges(h)).abs() * max(frames.shape[1:3]) / 96).clamp(max=1)
+        edge_error = _region_error(edge_error.square(), e)
         w = blend_weights(k, device)[None, :]
-        ghost = _temporal_peak((mismatch + 0.25 * edge_error) * (4 * w * (1 - w)))
+        # Energy of the weaker mixed contour. The old 4*w*(1-w) amplitude
+        # charged a faint overlay almost the full endpoint difference.
+        ghost = _temporal_peak((mismatch + 0.25 * edge_error) * torch.minimum(w, 1 - w).square())
     duration = (n - count).float() / n
     fade = torch.full_like(duration, k / n)
     # Retain the existing report key; the endpoint-only objective no longer uses
@@ -486,6 +529,9 @@ def _search(images, options, device, candidates, chunk, render_chunk, output_dev
     for i in satisfactory[:top_count]:
         if candidates[i] not in shortlist:
             shortlist.append(candidates[i])
+    for candidate in _fade_representatives(candidates, score_values, top_count):
+        if candidate not in shortlist:
+            shortlist.append(candidate)
     del scores, proxy, lookup
     _sync(device)
     timings["search_seconds"] = time.perf_counter() - start
@@ -501,11 +547,19 @@ def _search(images, options, device, candidates, chunk, render_chunk, output_dev
     timings["refinement_and_transfer_seconds"] = time.perf_counter() - start
     ranked = sorted(range(len(shortlist)), key=lambda i: (rows[i][0], shortlist[i]))
     valid = [i for i in ranked if rows[i][0] <= options.satisfactory_score]
-    if identity in shortlist and rows[shortlist.index(identity)][0] <= options.satisfactory_score:
+    identity_index = shortlist.index(identity) if identity in shortlist else None
+    preserve_identity = (identity_index is not None
+                         and rows[identity_index][0] <= options.satisfactory_score
+                         and rows[identity_index][0] <= rows[ranked[0]][0] + options.tie_tolerance)
+    if preserve_identity:
         winner = shortlist.index(identity)
         selection = "unchanged_satisfactory"
     elif valid:
-        winner = min(valid, key=lambda i: (sum(asdict(shortlist[i]).values()), shortlist[i].overlap, rows[i][0], shortlist[i]))
+        repairs = [i for i in valid if i != identity_index]
+        # At equal retained duration, prefer blending over discarding more whole
+        # source frames. Smaller K alone must not give a cut an automatic win.
+        winner = min(repairs, key=lambda i: (sum(asdict(shortlist[i]).values()),
+                                            _discarded_frame_count(shortlist[i]), rows[i][0], shortlist[i]))
         selection = "shortest_satisfactory_repair"
     else:
         winner = ranked[0]
@@ -514,18 +568,28 @@ def _search(images, options, device, candidates, chunk, render_chunk, output_dev
     alternatives = [{**asdict(shortlist[i]), "score": rows[i][0]} for i in ranked if i != winner][:5]
     tied = [row for row in alternatives if abs(row["score"] - rows[winner][0]) <= options.tie_tolerance]
     diagnostics = []
+    if identity_index in valid and not preserve_identity:
+        diagnostics.append("unchanged passed threshold, but a meaningfully better refined repair exists")
     if not valid:
         diagnostics.append("low_confidence: no refined candidate met the satisfactory threshold")
     if tied:
         diagnostics.append("uncertain: nearly tied refined candidates")
+    fade_comparison = []
+    for k in sorted(set(c.overlap for c in shortlist)):
+        i = min((i for i, c in enumerate(shortlist) if c.overlap == k), key=lambda i: (rows[i][0], shortlist[i]))
+        fade_comparison.append({**asdict(shortlist[i]), "score": rows[i][0],
+                                "metrics": dict(zip(METRICS, rows[i][1:]))})
     report = {"selected": asdict(selected), "selection": selection, "score": rows[winner][0],
+              "selection_policy": "shortest satisfactory repair, then fewest fully discarded source frames",
+              "fully_discarded_source_frames": _discarded_frame_count(selected),
+              "fade_comparison": fade_comparison,
               "metrics": dict(zip(METRICS, rows[winner][1:])), "alternatives": alternatives, "nearly_tied": tied,
               "confidence": "low" if not valid else ("uncertain" if tied else "heuristic_satisfactory"),
               "diagnostics": diagnostics, "candidate_count": len(candidates), "refined_count": len(shortlist),
               "input_frames": n, "output_frames": n - selected.trim_start - selected.trim_end - selected.overlap,
               "fps": options.fps, "input_duration_seconds": n / options.fps,
               "blend_space": options.blend_space, "proxy_long_edge": small_size, "refine_long_edge": refine_size,
-              "options": asdict(options), "objective_version": 3, "scoring_scope": "candidate boundary windows only",
+              "options": asdict(options), "objective_version": 4, "scoring_scope": "candidate boundary windows only",
               "optical_flow": "not used; temporal difference heuristic"}
     report["output_duration_seconds"] = report["output_frames"] / options.fps
     del refined, refined_scores, metrics, lookup

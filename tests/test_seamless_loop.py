@@ -216,6 +216,59 @@ def test_fade_length_adapts_to_endpoint_discontinuity():
     assert 0 < overlaps[0] < overlaps[1] <= 12
 
 
+def test_satisfactory_cut_does_not_block_a_better_microjump_fade():
+    x = torch.full((120, 8, 12, 3), 0.2)
+    x[-20:] += 0.006
+    opts = options(max_trim_start=0, max_trim_end=0)
+    scores, _ = score_candidates(x, [loop.LoopCandidate(), loop.LoopCandidate(0, 0, 1)], opts)
+    assert scores[0] <= opts.satisfactory_score
+    assert scores[1] < scores[0] - opts.tie_tolerance
+    result, report = loop.optimize_loop(x, opts)
+    k = report["selected"]["overlap"]
+    assert k > 0 and report["selection"] != "unchanged_satisfactory"
+    window = torch.cat((result[-k - 2:], result[:2]))
+    assert (window[1:] - window[:-1]).abs().max() < 0.006 * 0.6
+
+
+@pytest.mark.parametrize("k", [0, 1, 2, 3, 4])
+def test_discard_count_matches_actual_source_frame_contributions(k):
+    # A distinct channel per source frame identifies which frames contributed.
+    x = torch.eye(12).reshape(12, 1, 1, 12)
+    candidate = loop.LoopCandidate(1, 1, k)
+    result = loop.render_cycle(x, candidate)
+    absent = int((result.sum((0, 1, 2)) == 0).sum())
+    assert loop._discarded_frame_count(candidate) == absent
+
+
+def test_each_default_fade_length_gets_a_refinement_representative():
+    candidates = [loop.LoopCandidate(a, 0, k) for k in range(13) for a in range(2)]
+    scores = [float(c.overlap + (1 - c.trim_start) * 0.1) for c in candidates]
+    representatives = loop._fade_representatives(candidates, scores, 8)
+    assert [c.overlap for c in representatives] == list(range(13))
+    assert all(c.trim_start == 1 for c in representatives)
+    large = [loop.LoopCandidate(0, 0, k) for k in range(100)]
+    sampled = loop._fade_representatives(large, list(range(100)), 4)
+    assert len(sampled) == 9 and sampled[0].overlap == 0 and sampled[-1].overlap == 99
+
+
+def test_fade_report_includes_zero_and_four_frame_metrics():
+    _, report = loop.optimize_loop(quiet_endpoints_with_busy_middle(), options(max_trim_start=0, max_trim_end=0))
+    comparison = {row["overlap"]: row for row in report["fade_comparison"]}
+    assert set(comparison) == set(range(5))
+    assert "ghosting" in comparison[4]["metrics"] and comparison[0]["metrics"]["ghosting"] == 0
+
+
+def test_weak_ghost_energy_scales_with_squared_contour_contrast():
+    x = torch.zeros(20, 24, 40, 3)
+    for i in range(20):
+        x[i, 8:16, i:i + 4] = 0.2
+    _, first = score_candidates(x, [loop.LoopCandidate(0, 0, 4)], options())
+    _, second = score_candidates(x * 2, [loop.LoopCandidate(0, 0, 4)], options())
+    ghost = loop.METRICS.index("ghosting")
+    assert first[0, ghost] > 0
+    assert second[0, ghost] == pytest.approx(float(first[0, ghost]) * 4, rel=2e-4)
+
+
 def test_motion_direction_change_detected_despite_identical_endpoints():
     base = periodic_clip()
     x = torch.cat((base[:8], base[:8].flip(0)))
@@ -260,7 +313,7 @@ def test_busy_middle_repair_reduces_actual_transition_jump(quality):
     result, report = loop.optimize_loop(x, options(quality=quality, max_trim_start=0, max_trim_end=0))
     k = report["selected"]["overlap"]
     assert k > 0 and report["selection"] != "unchanged_satisfactory"
-    assert report["objective_version"] == 3
+    assert report["objective_version"] == 4
     # Independent pixel differences across all bridge links, including repeat.
     window = torch.cat((result[-k - 3:], result[:3]))
     repaired_jump = (window[1:] - window[:-1]).abs().amax()

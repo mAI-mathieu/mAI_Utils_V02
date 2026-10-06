@@ -82,7 +82,13 @@ Stage 1 uses aspect-preserving area proxies with long edge 64 / 96 / 128 for
 fast / balanced / high, without upscaling. Candidates are grouped by K and scored
 in tensor batches. Stage 2 uses original boundary frames at long edge 128 / 256 /
 384 and RGB information; refine the top 4 / 8 / 16, unchanged if permitted, plus
-the cheapest satisfactory repairs (at most another 4 / 8 / 16). Both stages resize
+the cheapest satisfactory repairs (at most another 4 / 8 / 16). Refinement also
+includes the best coarse candidate at each
+fade length, with a budget of 2*top_count+1 representatives. When the fade range
+exceeds that budget, sample its sorted lengths evenly, including both extremes.
+Balanced includes all valid default lengths 0..12. `fade_comparison` reports the best
+refined candidate per represented K, with its complete metrics; it is not proof
+that every trim pair at each K was refined. Both stages resize
 only the union of source frames needed for their candidate boundary windows.
 There is no middle-of-clip reference sampling or visual activity scan. Normal
 input validation still checks every frame, and rendering copies the retained
@@ -107,7 +113,7 @@ Let d be signed adjacent-frame differences, u the corresponding R(abs(d)),
 v the R(abs(d[t+1]-d[t])), e the absolute per-channel mean of d, and
 z the mean absolute change in spatial per-color-channel population standard
 deviation (contrast). Let `P(q)=.75*max(q)+.25*mean(q)` over the affected samples
-and r=fps/24. In **objective version 3**, all reference levels are local.
+and r=fps/24. In **objective version 4**, all reference levels are local.
 For u/e/z, take the maximum of the
 two original pairs before the transition and the two after it, then use the
 minimum of the two sides. Call these c_u/c_e/c_z.
@@ -123,15 +129,24 @@ without being included in its own discontinuity penalty. The reported metrics ar
 
 | Term | Definition | Default weight |
 |---|---|---:|
-| appearance | `P(max(0,u-1.5*c_u))*r` on changed pairs | 1.0 |
+| appearance | max of scalar and local-region excess on changed pairs, times r | 1.0 |
 | exposure | `P(max(0,e-1.5*c_e))*r` on changed pairs | 0.5 |
 | contrast | `P(max(0,z-1.5*c_z))*r` on changed pairs | exposure weight (0.5) |
-| motion | `P(max(0,v-1.5*c_v))*r^2` on affected accelerations | 0.6 |
+| motion | max of scalar and local-region excess on affected accelerations, times r^2 | 0.6 |
 | smoothness | `max(abs(u[t+1]-u[t]))*r` next to the transition | 0.4 |
-| ghosting | P of tone-matched tail/head structural mismatch plus 0.25 edge mismatch, times `4*w*(1-w)` | 1.0 |
+| ghosting | P of tone-matched RGB squared mismatch plus 0.25 normalized edge squared mismatch, times `min(w,1-w)^2` | 1.0 |
 | duration | `(N-Nout)/N` | 0.25 |
 | fade | `K/N` | 0.12 |
 | activity_loss | legacy report key, always zero in the endpoint-only objective | inactive |
+
+Scalar excess is `P(max(0,u-1.5*c_u))` for appearance, similarly v/c_v for motion.
+For the local check, pool each absolute RGB difference/acceleration map to the
+8x8 region grid. Take the maximum original context map on each side, then their
+region-wise maximum (motion may pass between regions), scaled by the quieter
+side's scalar rate divided by the louder side's, with denominator at least 1e-6.
+The regional term is `0.3*P(max_regions(max(0,changed_map-1.5*reference_map)))`.
+Take the maximum of it and the scalar excess, preserving detected quiet-region
+jumps without adding the same error twice.
 
 Contrast detects a gain/contrast flash even when mean brightness remains equal.
 It uses spatial RGB standard deviation, not semantic segmentation or a histogram
@@ -145,8 +160,12 @@ as doubled objects. Lower shared contrast avoids amplifying flat-image noise.
 Additional channels remain untouched. The actual rendered bridge always uses
 the original color values and configured blend space.
 
-Ghost edge differences are scaled by proxy long edge / 96 to use normalized image
-coordinates. Spatial reductions are means/weighted means, not resolution-dependent
+Ghost edge differences are scaled by proxy long edge / 96, clamped to 1, then
+squared to measure normalized contour energy. RGB mismatch is also squared. The
+weaker image has opacity `min(w,1-w)`; its squared opacity scales its energy.
+This avoids charging a faint overlay the full source-image mismatch. These are
+heuristic energy units, not a perceptually calibrated ghost detector. Spatial
+reductions are means/weighted means, not resolution-dependent
 sums. Temporal peak and mean have fixed contributions, so adding bridge frames
 cannot dilute a bad connection. First/second temporal derivatives scale with frame
 rate / squared frame rate. Pixel errors are in the input's `[0,1]` units; every
@@ -158,12 +177,19 @@ Version 1 used whole-clip quartiles directly, which could incorrectly mark a
 small pose/framing jump as satisfactory after a larger camera move. Version 2
 capped local references with clip-wide quartiles and retained an activity penalty;
 version 3 removes both dependencies and adds contrast and tone-matched ghosting.
+Version 4 adds region-specific excess detection and weaker-contour ghost energy,
+ensures fade lengths receive refinement coverage, and corrects cut-biased ties.
 Scores from
 different objective versions are not directly comparable.
 
 Selection is explicitly satisficing: unchanged wins when its refined score meets
-the threshold. Otherwise, among satisfactory refined choices minimize total lost
-frames `a+b+K`, then K, then score. If none is satisfactory select the lowest
+the threshold **and** is within tie_tolerance of the best refined score. Otherwise,
+exclude unchanged and among satisfactory repairs minimize total lost frames
+`a+b+K`, then fully discarded source frames, then score. Fully discarded count is
+`a+b` for K=0/1 and `a+b+2` for inclusive K>=2 (the first head and last tail have
+zero contribution). This treats K=2 as a cut and favors preserving source content
+in an actual blend when equally short repairs qualify. The JSON records this
+count and `selection_policy`. If none is satisfactory select the lowest
 refined score and report **low confidence**. Report near ties within tie tolerance,
 including alternatives with lower scores when a cheaper satisfactory repair wins.
 Duration/fade penalties and retention constraints discourage excessive trimming, static subsequence
@@ -256,8 +282,8 @@ identified image batch was supplied/found inside this repository, so the suggest
 
 ### Local verification, 2026-10-06
 
-Full suite after the endpoint-only update: **1,155 passed, 14 skipped**, including
-**76 focused loop tests**.
+Full suite after the fade-selection fix: **1,164 passed, 14 skipped**, including
+**85 focused loop tests**.
 The new node and existing registrations import together; frontend and deployment
 sources passed syntax checks, and example socket/widget wiring is tested. Full
 ComfyUI GUI playback was not performed. The host's standalone Python environment
@@ -267,7 +293,7 @@ are not a claim that its venv ran the test suite. Installed ComfyUI source APIs
 were inspected directly. No core files or existing node contracts were changed.
 
 Initial objective-version-1 isolated-process benchmarks (two warm runs; host
-default 24 CPU threads; these historical timings were not rerun for versions 2/3):
+default 24 CPU threads; these historical timings were not rerun for versions 2/3/4):
 
 | Case | Candidates | Warm search | Warm refinement + transfers | Warm render + transfers | Warm end-to-end |
 |---|---:|---:|---:|---:|---:|
@@ -327,6 +353,20 @@ start/end/fade pairing, a known clean pair, equal-mean contrast flashes, tone-on
 ghost exclusion, unchanged rendering/alpha, and fade length increasing with a
 stronger boundary discontinuity. These tests check independent pixel/contrast
 changes rather than only asserting a lower internal score.
+Version 4 adds a satisfactory cut hiding a better microjump fade, independent
+source-frame contribution counts, refinement coverage of K=4 even behind cheap
+cuts, per-fade report metrics, and squared-energy response to contour contrast.
+
+The full-resolution supplied clip was rerun with version 4: balanced selected
+0/0/1, retaining 120 frames (5 seconds), with uncertain confidence. The best
+refined K=4 representative was 0/1/4, retaining 116 frames (4.833 seconds), and
+also passed the threshold. Its score was within tie_tolerance of the selected
+one-frame repair. The default shortest-satisfactory policy still chooses the
+shorter repair; human playback preference can favor four frames. Set advanced
+`manual_overlap=4`, leaving both manual trims at -1, to force four-frame blending
+while continuing to search the best trim pair. After restarting ComfyUI, verify
+`objective_version=4` and inspect `fade_comparison` to confirm the current code
+executed. The blend construction itself did not change.
 For a visible residual cut, try advanced manual overlap 1 (one midpoint frame) or
 3/4 (a short mixed bridge); overlap 2 is a cut with endpoint trimming. These are
 crossfades, so displaced faces/hands may ghost. The node does not perform optical
