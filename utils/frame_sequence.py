@@ -1,4 +1,4 @@
-"""Frame-range calculations and trimming without a ComfyUI dependency."""
+"""Frame-range calculations, trimming, and loop fades without ComfyUI."""
 
 from numbers import Integral
 
@@ -57,6 +57,34 @@ def trim_frame_sequence_ends(frames, trim_start=0, trim_end=0):
         sum(batch.shape[0] for batch in batches), trim_start, trim_end
     )
     return _slice_frame_batches(batches, start, end)
+
+
+def append_loop_fade(frames, fade_frames=24):
+    """Append exactly fade_frames images, blending the last frame into the first.
+
+    The original sequence is preserved. Appended frame i uses first-frame opacity
+    i / fade_frames (i starts at 1), so the last appended frame is the first image.
+    """
+    import torch
+
+    if isinstance(fade_frames, bool) or not isinstance(fade_frames, Integral) or fade_frames < 0:
+        raise ValueError("fade_frames must be a non-negative integer.")
+    batches = _get_frame_batches(frames)
+    if not batches[0].is_floating_point():
+        raise ValueError("Loop fade requires floating-point IMAGE tensors.")
+    if fade_frames == 0:
+        return batches[0] if len(batches) == 1 else torch.cat(batches, dim=0)
+
+    first = batches[0][:1]
+    last = batches[-1][-1:]
+    # Calculate weights in at least float32 before converting to the IMAGE dtype.
+    weight_dtype = torch.float64 if first.dtype == torch.float64 else torch.float32
+    weights = torch.arange(1, fade_frames + 1, device=first.device, dtype=weight_dtype)
+    weights = (weights / fade_frames).to(first.dtype).reshape(-1, 1, 1, 1)
+    fade = torch.lerp(last, first, weights)
+    # Avoid interpolation roundoff at the loop endpoint.
+    fade[-1].copy_(first[0])
+    return torch.cat([*batches, fade], dim=0)
 
 
 def _get_frame_batches(frames):

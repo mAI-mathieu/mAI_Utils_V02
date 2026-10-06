@@ -657,6 +657,36 @@ Preview Image or a video encoder. Try counts `0/0`, `2/0`, `0/3`, and `2/3` and 
 the retained first/last frames and `frame_count`. Also try an IMAGE list source.
 Automated tests: `python -m pytest tests/test_frame_sequence.py tests/test_trim_frame_sequence.py`.
 
+## mAI frame loop fade
+
+Location: `mAI / Image`. Registered as `MAIFrameLoopFade`.
+
+Extends an image sequence with a linear crossfade from its last frame back to its
+first frame for loop playback. Inputs: `images` (`IMAGE` batch or ordered list of
+frames/batches) and `fade_frames` (`INT`, default `24`, widget range `0`–`10000`).
+Outputs, in order: `images` (`IMAGE`, one batch) and `frame_count` (`INT`).
+
+All original frames remain unchanged, followed by exactly `fade_frames` new
+images. The first image's opacity increases from `1 / fade_frames` to `1` over
+the appended frames; the final frame matches the original first frame exactly.
+For example, 100 input frames with `fade_frames=24` produce 124 frames.
+`0` keeps the sequence unchanged; `1` appends the first image directly.
+A single input image is repeated. Tensor dtype and device are preserved.
+
+Limitations: frames must be non-empty floating-point tensors with matching
+dimensions, channels, dtype, and device. This is a pixel blend between two still
+frames, so moving subjects can ghost during the fade. The final first-frame copy
+is repeated when playback loops. Additional images require memory. Audio and FPS
+are not adjusted; at a fixed FPS, the video becomes `fade_frames / FPS` seconds
+longer. Connected fade settings must supply one value for the whole sequence.
+
+Test in ComfyUI: restart, add **mAI frame loop fade**, connect an image sequence
+(such as `frames` from **mAI video loader**) to `images`, and send its `images`
+output to Preview Image or a video encoder. Try `fade_frames=4`: the frame count
+should increase by four, and the added images should show 25%, 50%, 75%, and 100%
+of the first frame over the last. Try `0` to confirm the original sequence.
+Automated tests: `python -m pytest tests/test_frame_loop_fade.py`.
+
 ## mAI H3 to LTX Frame Adapter
 
 Location: `mAI / Image`. Registered as `MAIH3ToLTXFrameAdapter`.
