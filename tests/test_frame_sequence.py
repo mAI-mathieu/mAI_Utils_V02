@@ -1,7 +1,12 @@
 import pytest
 import torch
 
-from utils.frame_sequence import get_trim_bounds, trim_frame_sequence
+from utils.frame_sequence import (
+    get_independent_trim_bounds,
+    get_trim_bounds,
+    trim_frame_sequence,
+    trim_frame_sequence_ends,
+)
 
 
 @pytest.mark.parametrize(
@@ -65,3 +70,56 @@ def test_single_remaining_frame_with_both_ends():
 def test_rejects_invalid_sequences(frames, message):
     with pytest.raises(ValueError, match=message):
         trim_frame_sequence(frames, "start", 0)
+    with pytest.raises(ValueError, match=message):
+        trim_frame_sequence_ends(frames, 0, 0)
+
+
+@pytest.mark.parametrize(
+    "count,start,end,expected",
+    [(10, 0, 0, (0, 10)), (10, 2, 0, (2, 10)), (10, 0, 3, (0, 7)),
+     (10, 2, 3, (2, 7)), (10, 9, 0, (9, 10)), (10, 0, 9, (0, 1)),
+     (10, 4, 5, (4, 5)), (1, 0, 0, (0, 1))],
+)
+def test_independent_trim_bounds(count, start, end, expected):
+    assert get_independent_trim_bounds(count, start, end) == expected
+
+
+@pytest.mark.parametrize("count", [0, -1, True, 1.5, "10"])
+def test_independent_bounds_reject_invalid_frame_count(count):
+    with pytest.raises(ValueError, match="at least one frame"):
+        get_independent_trim_bounds(count, 0, 0)
+
+
+@pytest.mark.parametrize("amount", [-1, True, 1.5, "2", None])
+@pytest.mark.parametrize("setting", ["trim_start", "trim_end"])
+def test_independent_bounds_reject_invalid_counts(amount, setting):
+    counts = {"trim_start": 0, "trim_end": 0}
+    counts[setting] = amount
+    with pytest.raises(ValueError, match=f"{setting} must be a non-negative integer"):
+        get_independent_trim_bounds(10, **counts)
+
+
+@pytest.mark.parametrize("start,end", [(10, 0), (0, 10), (4, 6), (5, 7)])
+def test_independent_bounds_reject_trimming_entire_sequence(start, end):
+    with pytest.raises(ValueError, match="at least one frame must remain"):
+        get_independent_trim_bounds(10, start, end)
+
+
+@pytest.mark.parametrize("representation", ["batch", "frames", "single_batches", "chunks"])
+@pytest.mark.parametrize("start,end", [(0, 0), (2, 0), (0, 3), (2, 3), (4, 5)])
+def test_independent_trims_preserve_frames_across_batch_boundaries(representation, start, end):
+    original = torch.arange(120, dtype=torch.float64).reshape(10, 2, 2, 3)
+    before = original.clone()
+    inputs = {
+        "batch": original,
+        "frames": list(original),
+        "single_batches": list(original.split(1)),
+        "chunks": [original[:2], original[2:6], original[6:]],
+    }
+    result = trim_frame_sequence_ends(inputs[representation], start, end)
+    assert torch.equal(result, original[start:10 - end])
+    assert result.dtype == original.dtype
+    assert result.device == original.device
+    assert torch.equal(original, before)
+    if representation == "batch":
+        assert result.untyped_storage().data_ptr() == original.untyped_storage().data_ptr()

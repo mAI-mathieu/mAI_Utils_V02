@@ -623,16 +623,17 @@ Known limitations:
 Location: `mAI / Image`. Registered as `MAITrimFrameSequence`.
 
 Trims frames from an image batch or an ordered list of image frames/batches.
-Inputs: `frames` (`IMAGE`), `trim_mode`, and `trim_amount` (non-negative integer).
+Inputs: `frames` (`IMAGE`), `trim_start`, and `trim_end` (non-negative integers).
 Outputs, in order: `frames` (`IMAGE`, one batch), `frame_count` (`INT`, remaining frames).
 
-* `start` removes the first `trim_amount` frames.
-* `end` removes the last `trim_amount` frames.
-* `both ends` removes `trim_amount` frames **from each end**.
+* `trim_start` removes that many frames from the beginning.
+* `trim_end` removes that many frames from the end.
+* Set either count to `0` to keep that end; the counts can differ.
 
-Defaults: `start`, amount `0` (keeps all frames). List inputs are treated as one
+Defaults: both counts `0` (keeps all frames). List inputs are treated as one
 continuous sequence in their original order, including lists of multi-frame batches.
-For 10 frames and amount 2, start/end leave 8 frames; both ends leaves 6.
+For 10 frames with `trim_start=2` and `trim_end=3`, five frames remain
+(original frames 3 through 7).
 Pixel values, tensor dtype, and device are preserved.
 
 Limitations: at least one frame must remain; empty inputs or trims removing every
@@ -641,9 +642,18 @@ device. Output is always a batch; combining lists allocates memory for retained
 frames. This node trims images only; audio and FPS are not adjusted. Connected
 trim settings must each supply one value for the entire sequence.
 
+The node name, registration, IMAGE input, and outputs are unchanged. The old
+`trim_mode`/`trim_amount` controls are replaced by the two counts. The frontend
+automatically converts saved dropdown/count widget settings when loading old
+workflows: `start` becomes `amount/0`, `end` becomes `0/amount`, and `both ends`
+becomes `amount/amount`. Old connections to converted trim widgets must be
+reconnected to the new count inputs; API prompts must use `trim_start` and
+`trim_end`. Without the frontend extension, old widget settings need to be set
+manually; execution of the new inputs requires no JavaScript.
+
 Test in ComfyUI: restart, add **mAI trim frame sequence**, connect an image batch
 (for example, `frames` from **mAI video loader**), and connect the result to
-Preview Image or a video encoder. Try all three modes with amount 2 and check
+Preview Image or a video encoder. Try counts `0/0`, `2/0`, `0/3`, and `2/3` and check
 the retained first/last frames and `frame_count`. Also try an IMAGE list source.
 Automated tests: `python -m pytest tests/test_frame_sequence.py tests/test_trim_frame_sequence.py`.
 

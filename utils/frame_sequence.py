@@ -27,6 +27,40 @@ def get_trim_bounds(frame_count, trim_mode, trim_amount):
 
 def trim_frame_sequence(frames, trim_mode, trim_amount):
     """Trim a batch or a list of frames/batches and return one IMAGE batch."""
+    batches = _get_frame_batches(frames)
+    start, end = get_trim_bounds(
+        sum(batch.shape[0] for batch in batches), trim_mode, trim_amount
+    )
+    return _slice_frame_batches(batches, start, end)
+
+
+def get_independent_trim_bounds(frame_count, trim_start, trim_end):
+    """Return an exclusive-end range using separate counts for each end."""
+    if isinstance(frame_count, bool) or not isinstance(frame_count, Integral) or frame_count < 1:
+        raise ValueError("The frame sequence must contain at least one frame.")
+    for name, amount in (("trim_start", trim_start), ("trim_end", trim_end)):
+        if isinstance(amount, bool) or not isinstance(amount, Integral) or amount < 0:
+            raise ValueError(f"{name} must be a non-negative integer.")
+    end = frame_count - trim_end
+    if trim_start >= end:
+        raise ValueError(
+            f"Cannot trim {trim_start} frame(s) from the start and {trim_end} "
+            f"from the end of a {frame_count}-frame sequence; at least one frame must remain."
+        )
+    return trim_start, end
+
+
+def trim_frame_sequence_ends(frames, trim_start=0, trim_end=0):
+    """Trim independent start/end counts and return one ordered IMAGE batch."""
+    batches = _get_frame_batches(frames)
+    start, end = get_independent_trim_bounds(
+        sum(batch.shape[0] for batch in batches), trim_start, trim_end
+    )
+    return _slice_frame_batches(batches, start, end)
+
+
+def _get_frame_batches(frames):
+    """Validate compatible IMAGE tensors and normalize individual HWC frames."""
     import torch
 
     batches = list(frames) if isinstance(frames, (list, tuple)) else [frames]
@@ -50,9 +84,12 @@ def trim_frame_sequence(frames, trim_mode, trim_amount):
         if batch.dtype != first.dtype or batch.device != first.device:
             raise ValueError("All frames must have the same tensor dtype and device.")
 
-    start, end = get_trim_bounds(
-        sum(batch.shape[0] for batch in batches), trim_mode, trim_amount
-    )
+    return batches
+
+
+def _slice_frame_batches(batches, start, end):
+    import torch
+
     # Slice before concatenating so discarded frames do not need a new allocation.
     retained = []
     offset = 0
