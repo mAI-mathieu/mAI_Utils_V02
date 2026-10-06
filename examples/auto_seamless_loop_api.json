@@ -6,7 +6,7 @@
   "2": {
     "class_type": "MAIAutoSeamlessLoop",
     "inputs": {
-      "images": ["1", 0], "fps": ["1", 1],
+      "images": ["1", 0], "fps": ["1", 1], "audio": ["1", 2],
       "device": "auto", "quality": "balanced",
       "max_trim_start": 8, "max_trim_end": 8, "max_fade": 12,
       "min_retained_percent": 70.0, "advanced_controls": false
@@ -15,10 +15,10 @@
   "3": {
     "class_type": "MAIGPUVideoCombine",
     "inputs": {
-      "frames": ["2", 0], "frame_rate": ["2", 1],
+      "frames": ["2", 0], "frame_rate": ["2", 1], "audio": ["2", 7],
       "filename_prefix": "video/auto_seamless_loop",
       "codec": "libx264", "quality": 18, "preset": "p4",
-      "pingpong": false, "loop_count": 2, "trim_to_audio": false,
+      "pingpong": false, "loop_count": 0, "trim_to_audio": false,
       "save_output": true, "save_metadata": true,
       "gpu_device": -1, "chunk_size": 0
     }

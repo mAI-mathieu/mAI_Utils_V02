@@ -1200,22 +1200,35 @@ Inputs: `images`, positive `fps` (24 by default), `device` (auto/cuda/cpu), `qua
 expose score weights, sRGB/linear-light blending and manual trims/overlap (-1=auto).
 Missing optional controls use defaults. CPU/CUDA execution respects ComfyUI's
 device policy, supports progress/cancellation and reports bounded OOM fallback.
+Optional `audio` accepts ComfyUI AUDIO aligned with the input's first frame.
 
 Outputs, in order: `images`, `fps`, `frame_count`, `trim_start`, `trim_end`,
-`overlap`, `report` (JSON). The cycle is the unblended middle followed by the
+`overlap`, `report` (JSON), `audio` (AUDIO). The audio output is appended after
+the seven existing outputs. The cycle is the unblended middle followed by the
 blended bridge; length is `N - trim_start - trim_end - overlap`, with exact duration
 in the report. FPS stays unchanged. Satisfactory unchanged clips retain all frames.
+Audio follows the selected trims, start rotation and overlap, with a continuous
+linear crossfade and unchanged sample rate/channels. Its length matches the final
+video duration to the nearest sample, without stretching. Short source audio is
+padded with silence; audio beyond the source video is discarded. Missing audio
+returns no AUDIO value, compatible with the optional input of video-combine nodes.
+Audio tensors return on CPU. Connect loader audio to this node, then its audio
+output to your video-combine node alongside its images and FPS.
 
 Install this pack under `ComfyUI/custom_nodes`, restart ComfyUI, and load
 [the example workflow](examples/auto_seamless_loop.json); select a video from the
-input folder. Inspect the encoded repeats and connect `report` to a STRING viewer.
+input folder. Inspect repeat playback and connect `report` to a STRING viewer.
+The example saves one synchronized cycle; enable repeat playback in your player
+to inspect the seam. Keep `loop_count=0` and `trim_to_audio=false` for this example:
+the pack's combine node repeats video frames but does not repeat the audio track.
 The example uses existing IO nodes and software libx264; only those IO steps need
 video codecs. An existing generated IMAGE batch can connect directly to the node.
 
 The objective is a documented two-stage heuristic, not a guarantee of perceptual
 perfection. Tiny subjects, occlusions and motion may remain difficult; uncertain
-or poor results are reported. Default shortening/phase rotation does not preserve
-audio alignment. High mode uses larger proxies rather than optical flow.
+or poor results are reported. The search scores video, so an audio edit can still
+sound noticeable, particularly across speech. Pre-existing audio offsets are not
+corrected. High mode uses larger proxies rather than optical flow.
 For clips already intended to loop, objective version 4 searches every permitted
 start/end trim pair and each valid overlap from zero through `max_fade`. Both
 scoring stages inspect only candidate boundary neighborhoods and the actual
@@ -1243,7 +1256,8 @@ ghosting and does not align objects or repair generated geometry.
 See [construction, scoring and controls](docs/auto_seamless_loop.md),
 [RunPod/Modal examples](deployment/auto_seamless_loop/README.md), and
 [benchmark utility](scripts/benchmark_seamless_loop.py). Run
-`python -m pytest tests/test_seamless_loop.py -q` for focused tests; CUDA cases skip
+`python -m pytest tests/test_seamless_loop.py tests/test_seamless_loop_audio.py -q`
+for focused tests; CUDA cases skip
 on CPU hosts. RTX 5090 and CPU tested locally; RTX PRO 6000, B200/B300 and cloud
 deployments remain unverified on hardware.
 

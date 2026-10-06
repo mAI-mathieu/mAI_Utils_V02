@@ -487,10 +487,11 @@ def test_progress_and_node_contract_optional_defaults(monkeypatch):
     monkeypatch.setitem(sys.modules, "comfy.utils", utils)
     node = MAIAutoSeamlessLoop()
     result = node.run(torch.zeros(8, 4, 6, 3))
-    assert len(result) == 7 and result[1:6] == (24.0, 8, 0, 0, 0)
-    assert node.RETURN_NAMES == ("images", "fps", "frame_count", "trim_start", "trim_end", "overlap", "report")
+    assert len(result) == 8 and result[1:6] == (24.0, 8, 0, 0, 0)
+    assert node.RETURN_NAMES == ("images", "fps", "frame_count", "trim_start", "trim_end", "overlap", "report", "audio")
     assert node.CATEGORY == "mAI / Image" and calls[-1] == 100
-    assert json.loads(result[-1])["backend"]["selected_device"] == "cpu"
+    assert json.loads(result[6])["backend"]["selected_device"] == "cpu"
+    assert result[7] is None and json.loads(result[6])["audio"] == {"present": False}
 
 
 def test_import_does_not_initialize_cuda_and_registration_preserves_nodes():
@@ -569,8 +570,10 @@ def test_workflow_wiring_matches_released_sockets_and_widgets():
     assert len(widgets) == len(node["widgets_values"])
     assert api["2"]["inputs"]["images"] == ["1", 0]
     assert api["2"]["inputs"]["fps"] == ["1", 1]
+    assert api["2"]["inputs"]["audio"] == ["1", 2]
     assert api["3"]["inputs"]["frames"] == ["2", 0]
     assert api["3"]["inputs"]["frame_rate"] == ["2", 1]
+    assert api["3"]["inputs"]["audio"] == ["2", 7]
     assert api["3"]["inputs"]["codec"] == "libx264"
 
 
@@ -648,7 +651,7 @@ def test_comfy_cuda_device_query_failure_has_cpu_fallback(monkeypatch):
     management.intermediate_device = lambda: torch.device("cpu")
     monkeypatch.setitem(sys.modules, "comfy.model_management", management)
     result = MAIAutoSeamlessLoop().run(torch.zeros(4, 1, 1, 3))
-    report = json.loads(result[-1])
+    report = json.loads(result[6])
     assert report["backend"]["selected_device"] == "cpu"
     assert "device query" in report["backend"]["fallback_reason"]
 

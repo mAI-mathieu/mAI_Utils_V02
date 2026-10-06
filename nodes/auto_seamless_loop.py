@@ -6,19 +6,22 @@ import sys
 import torch
 
 try:
-    from ..utils.seamless_loop import LoopOptions, is_cuda_compatibility_error, optimize_loop
+    from ..utils.seamless_loop import LoopCandidate, LoopOptions, is_cuda_compatibility_error, optimize_loop
+    from ..utils.seamless_loop_audio import render_loop_audio, validate_loop_audio
 except ImportError:
-    from utils.seamless_loop import LoopOptions, is_cuda_compatibility_error, optimize_loop
+    from utils.seamless_loop import LoopCandidate, LoopOptions, is_cuda_compatibility_error, optimize_loop
+    from utils.seamless_loop_audio import render_loop_audio, validate_loop_audio
 
 
 class MAIAutoSeamlessLoop:
     CATEGORY = "mAI / Image"
     FUNCTION = "run"
-    RETURN_TYPES = ("IMAGE", "FLOAT", "INT", "INT", "INT", "INT", "STRING")
-    RETURN_NAMES = ("images", "fps", "frame_count", "trim_start", "trim_end", "overlap", "report")
+    RETURN_TYPES = ("IMAGE", "FLOAT", "INT", "INT", "INT", "INT", "STRING", "AUDIO")
+    RETURN_NAMES = ("images", "fps", "frame_count", "trim_start", "trim_end", "overlap", "report", "audio")
     DESCRIPTION = (
         "Jointly search trims and crossfades for an ordered video IMAGE batch. "
         "Score the start/end transition for microjumps, motion, brightness, contrast and ghosting. "
+        "Optional audio follows the same trims, phase rotation and overlap. "
         "Output may be shorter; FPS is unchanged. No video encoder or model required."
     )
 
@@ -47,12 +50,13 @@ class MAIAutoSeamlessLoop:
                 **{name: ("INT", {"default": -1, "min": -1, "max": 10000,
                                   "tooltip": "-1 searches automatically. Nonnegative values fix this dimension within the basic bounds."})
                    for name in ("manual_trim_start", "manual_trim_end", "manual_overlap")},
+                "audio": ("AUDIO",),
             },
         }
 
     def run(self, images, fps=24.0, device="auto", quality="balanced", max_trim_start=8,
             max_trim_end=8, max_fade=12, min_retained_percent=70.0, advanced_controls=False,
-            **advanced):
+            audio=None, **advanced):
         options = LoopOptions(fps=fps, device=device, quality=quality, max_trim_start=max_trim_start,
                               max_trim_end=max_trim_end, max_fade=max_fade,
                               min_retained_percent=min_retained_percent, **advanced)
@@ -63,6 +67,7 @@ class MAIAutoSeamlessLoop:
         configured_error = None
         if interrupt:
             interrupt()
+        validate_loop_audio(audio, check_interrupt=interrupt)
         if device == "auto" and management is not None:
             try:
                 preferred = management.get_torch_device()
@@ -83,5 +88,8 @@ class MAIAutoSeamlessLoop:
         if configured_error:
             report["backend"]["fallback_reason"] = configured_error
         selected = report["selected"]
+        loop_audio, report["audio"] = render_loop_audio(
+            audio, len(images), float(fps), LoopCandidate(selected["trim_start"], selected["trim_end"],
+                                                        selected["overlap"]), check_interrupt=interrupt)
         return (result, float(fps), len(result), selected["trim_start"], selected["trim_end"],
-                selected["overlap"], json.dumps(report, allow_nan=False))
+                selected["overlap"], json.dumps(report, allow_nan=False), loop_audio)

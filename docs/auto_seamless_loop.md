@@ -24,15 +24,53 @@ threshold (0.025), tie tolerance (0.002), and three manual overrides. Each overr
 defaults to -1 (auto); nonnegative values fix that dimension **within the basic
 limits**. Set all three for a fully manual construction. A manual override may
 exclude the unchanged candidate. Missing optional controls use Python defaults.
-The frontend only hides widgets; their values persist, and all seven output
+The frontend only hides widgets; their values persist, and all output
 sockets remain available even if the frontend extension fails.
 
 Stable output order: `images:IMAGE`, `fps:FLOAT`, `frame_count:INT`,
-`trim_start:INT`, `trim_end:INT`, `overlap:INT`, `report:STRING`.
+`trim_start:INT`, `trim_end:INT`, `overlap:INT`, `report:STRING`, `audio:AUDIO`.
+Audio is appended at index 7; the original seven output indices are unchanged.
 The JSON includes exact durations, objective terms, selected backend, GPU smoke
 test, fallback attempts, timing phases, alternative candidates and uncertainty.
-FPS is never changed. Original audio is not edited and is intentionally unconnected
-in the example, since shortening or rotating the cycle also changes audio alignment.
+FPS is never changed. Optional AUDIO follows the selected video construction.
+
+## Synchronized audio
+
+Connect source AUDIO to `audio`, then connect the new `audio` output to your
+video-combine node. Input is a ComfyUI dictionary containing a finite floating
+waveform `[batch, channels, samples]` and integer `sample_rate` (1..384000).
+The audio must already start at frame zero; no pre-existing offset is inferred.
+Sample rate, channels, batch size and dtype are preserved; output is on CPU.
+Absent audio returns `None`, accepted by the pack's optional combine input.
+Downstream nodes that require audio need an actual source. The loop utility
+preserves batches, but the pack's video-combine node accepts only batch size 1.
+
+For selected trims a/b and overlap K, the audio starts at source frame a+K
+(a when K=0), copies the unblended middle, then crossfades the final K frames'
+audio with the first K frames' audio of the trimmed source. For K>=2, continuous
+linear gains match the video blend weights at bridge frame centers: with t in
+frames from the bridge start, head gain is `clamp((t-0.5)/(K-1), 0, 1)`.
+For K=1, audio ramps from tail to head across the frame, representing the video's
+half mix at the center (within sample rounding). Tail gain is always 1-head gain.
+This keeps coherent signals at their original gain; it does not stretch or
+resample audio, change speed, normalize volume, or use image color transfer.
+
+Frame offsets round to the nearest sample. Output length is exactly
+`round((N-a-b-K) * sample_rate / fps)`. The bridge receives the remaining samples
+after the rounded middle, so fractional samples per frame do not accumulate a
+duration error. The duration differs from the video's by at most half a sample;
+individual source splice positions can differ by one sample. Short input audio
+is treated as silence before trimming/blending; samples beyond N/fps are dropped.
+An empty supplied waveform becomes silence of the required duration.
+The JSON `audio` section reports duration, sample count, padding and truncation.
+Audio validation/copy/blending are chunked and support cancellation.
+
+Selection remains based on video quality. Speech or music may have an audible
+edit even when timing matches; there is no separate audio seam optimization.
+The example encodes one cycle with `loop_count=0`, `trim_to_audio=false`, and
+audio connected through this node. Repeat playback in the player to inspect
+both seams. The existing combine node repeats video frames only; encoding
+multiple cycles there without repeating audio would leave silence after one.
 
 ## Exact construction
 
@@ -247,7 +285,8 @@ restart progress. There is no hidden retiming or preserve-duration mode.
    your usual video-combine node, or core CreateVideo followed by SaveVideo.
 5. Load `examples/auto_seamless_loop.json` in ComfyUI, put `loop_input.mp4` in its
    input folder and select it in the loader. The example uses the pack's software
-   `libx264` output and encodes three repetitions so you can inspect boundaries.
+   `libx264` output and encodes one synchronized cycle; repeat playback to inspect
+   boundaries.
    Decoding/encoding are separate from core tensor operation. Software encoding
    works on data-center GPUs without NVENC; even output dimensions are recommended
    because the existing combine node pads odd sizes to even.
@@ -256,14 +295,14 @@ For a headless API server, `examples/auto_seamless_loop_api.json` is the prompt
 graph. POST `{"prompt": <contents of that file>}` to `/prompt`, then poll
 `/history/<prompt_id>` for the output. Select a different input filename if needed.
 The report output can connect to any STRING consumer; it is not automatically
-written to disk or shown by a new output node. Original audio is intentionally
-not connected. No models are needed for this example.
+written to disk or shown by a new output node. Source audio is connected through
+the loop node to the encoder. No models are needed for this example.
 
 ## Tests and benchmarking
 
 ```bash
 python -m pytest
-python -m pytest tests/test_seamless_loop.py -q
+python -m pytest tests/test_seamless_loop.py tests/test_seamless_loop_audio.py -q
 python scripts/benchmark_seamless_loop.py --device cpu --runs 3
 python scripts/benchmark_seamless_loop.py --device cuda --runs 3
 ```
