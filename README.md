@@ -5,6 +5,99 @@ ComfyUI custom node pack for small, reusable mAI utility nodes.
 Install this folder under ComfyUI's `custom_nodes` directory, then restart ComfyUI.
 The currently registered nodes are listed below.
 
+## mAI Mask Smart Crop / mAI Mask Smart Stitch
+
+Location: `mAI / Mask`. Registered as `MAIMaskSmartCrop` and
+`MAIMaskSmartStitch`. Independent of the optional Inpaint CropAndStitch pack.
+
+**Smart Crop** extracts surrounding source pixels around the mask at native
+1:1 scale whenever the padded mask fits the requested output. A 300 × 500 mask
+with a 1024 × 1024 target selects a native 1024 × 1024 rectangle; it does not
+enlarge the mask bbox to fill the target. A 1400 × 700 mask with that target
+selects a 1400 × 1400 source rectangle and downsizes it to 1024 × 1024.
+
+Required inputs: `image` (IMAGE), source-size `mask` (MASK), `output_width`
+and `output_height` (INT, defaults 1024). Optional settings:
+
+* `mask_padding` (INT, default 0): expand the bbox in source pixels, clipped to
+  the original canvas before selecting the crop.
+* `mask_threshold` (FLOAT, default 0.01): pixels strictly above this value define
+  the bbox. Soft semantic mask values are retained for cropping and blending.
+* `allow_upscale` (BOOLEAN, default false): for an undersized source, optionally
+  choose the largest smaller rectangle of the target aspect ratio that fits
+  the image and still contains the entire padded mask. Otherwise use padding.
+* `edge_mode` (`shift` default, or `pad`): shift maximizes real source pixels;
+  pad keeps the mask centered. Missing image pixels replicate the nearest edge;
+  missing mask pixels are zero. An empty bbox uses the image center.
+
+Outputs, in order: `cropped_image` (IMAGE), `cropped_mask` (MASK),
+`full_crop_mask` (MASK), `crop_context` (`MAI_MASK_CROP_CONTEXT`), `crop_x`
+(INT), `crop_y` (INT), `crop_width` (INT), `crop_height` (INT), `scale` (FLOAT).
+The full crop mask has the original image resolution and marks exactly the
+selected source rectangle intersected with the original canvas, including
+context around the semantic mask. It excludes nonexistent padded pixels.
+Coordinates and width/height describe the **source** crop before resizing;
+coordinates can be negative when padded. Scale is output/source, uniform on
+both axes; 1.0 means no resizing.
+
+**Smart Stitch** restores the processed crop to the saved source dimensions,
+discards padding, and composites at the saved integer coordinates. Required
+inputs: `original_image` (IMAGE), `generated_image` (IMAGE), and `crop_context`.
+Output: `image` (IMAGE), always the original resolution, device and dtype.
+Optional inputs:
+
+* `mask` (MASK): override at **cropped output resolution**, usually `cropped_mask`.
+  If disconnected, use the saved native semantic mask. If that information is
+  absent from the context, safely use the full valid crop.
+* `feather` (INT, default 0): Gaussian radius in original source pixels, only
+  used by `mask_feather`; feathering is clipped to the valid crop rectangle.
+* `composite_mode`: `mask_feather` (default) blends with the semantic mask and
+  optional feathering; `mask_only` blends with its unchanged soft values;
+  `full_crop` replaces the entire valid rectangle described by `full_crop_mask`.
+
+Connect the same original image to Crop's `image` and Stitch's `original_image`;
+connect `crop_context` directly between them. Send `cropped_image` through your
+refinement/inpainting workflow into `generated_image`, keeping its resolution,
+channels, batch size and order. Stitch needs no mask connection by default.
+Pixels outside the valid crop always remain exact; with feather 0 and no override,
+pixels outside the native semantic mask also remain exact after resized crops.
+
+Batch support: `[B,H,W,C]` images, `[B,H,W]` or `[H,W]` masks. A single mask
+broadcasts; other mismatched batches or source mask resolutions raise clear
+errors. Each batch item has independent geometry, a full crop mask and a native
+semantic mask snapshot. Scalar geometry sockets and top-level context fields
+describe the first item; `crop_context["items"]` contains every item's metadata.
+The context is an in-memory dictionary with tensor masks, intended for a direct
+socket connection rather than JSON serialization.
+
+Geometry is deterministic: bbox bounds are half-open, crop positions are
+integers, and odd extra context pixels go to the right/bottom before edge
+adjustment. Requested output dimensions are exact, with no alignment rounding.
+Resized source rectangles are integer multiples of the reduced output aspect
+ratio to avoid stretching; targets with relatively prime dimensions can need
+larger source rectangles. Image interpolation is antialiased bicubic; masks use
+antialiased bilinear. Torch operates on the input device; only bbox coordinates
+transfer to Python. Crop masks retain their floating input dtype (integer masks
+become float32), including when images use half precision. Half/bfloat16
+interpolation and feathering compute in float32.
+No new dependencies or frontend extensions are required.
+
+Limitations: native unchanged-crop round trips are pixel-identical, including
+padding and soft masks. Resizing loses detail, so resized round trips cannot be
+lossless. Refinement must preserve crop orientation and batch order; those cannot
+be inferred from tensors. Large source rectangles/padding and full-size mask
+outputs consume memory. Stitch mask overrides pass through interpolation;
+leave the optional mask disconnected to preserve the native semantic boundary.
+
+Test in ComfyUI: restart, search **mAI Mask Smart Crop** and **mAI Mask Smart
+Stitch**, and first connect `cropped_image` directly to `generated_image`.
+Queue a small center mask, then an edge mask, and confirm `scale=1.0`, unchanged
+stitched output and the correct white rectangle in `full_crop_mask`. Try an
+oversized mask, a rectangular target, and an image smaller than the target.
+For replacement testing, process the crop and select `full_crop` or the default
+mask mode. Save/reload the workflow. Automated tests:
+`python -m pytest tests/test_mask_crop_geometry.py tests/test_mask_smart_crop.py tests/test_mask_smart_stitch.py`.
+
 ## mAI Image Logic Check
 
 Location: `mAI / Logic`. Registered as `MAIImageLogicCheck`.

@@ -15,6 +15,8 @@ from .nodes.json_parser import MAIJsonParser
 from .nodes.krea2_image_conditioning import MAIKrea2ImageConditioning
 from .nodes.mask_bounding_box import MAIMaskBoundingBox
 from .nodes.mask_outline import MAIMaskOutline
+from .nodes.mask_smart_crop import MAIMaskSmartCrop
+from .nodes.mask_smart_stitch import MAIMaskSmartStitch
 from .nodes.prepare_image_for_minimax_h3 import MAIPrepareImageForMinimaxH3
 from .nodes.random_line_node import MAIRandomLine
 from .nodes.save_text_file_node import MAISaveTextFile
@@ -59,6 +61,8 @@ NODE_CLASS_MAPPINGS = {
     "MAIKrea2ImageConditioning": MAIKrea2ImageConditioning,
     "MAIMaskBoundingBox": MAIMaskBoundingBox,
     "MAIMaskOutline": MAIMaskOutline,
+    "MAIMaskSmartCrop": MAIMaskSmartCrop,
+    "MAIMaskSmartStitch": MAIMaskSmartStitch,
     "MAIPrepareImageForMinimaxH3": MAIPrepareImageForMinimaxH3,
     "MAIRandomLine": MAIRandomLine,
     "MAISaveTextFile": MAISaveTextFile,
@@ -86,6 +90,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MAIKrea2ImageConditioning": "mAI Krea2 image conditioning",
     "MAIMaskBoundingBox": "mAI mask bounding box",
     "MAIMaskOutline": "mAI mask outline",
+    "MAIMaskSmartCrop": "mAI Mask Smart Crop",
+    "MAIMaskSmartStitch": "mAI Mask Smart Stitch",
     "MAIPrepareImageForMinimaxH3": "mAI prepare image for Minimax H3",
     "MAIRandomLine": "mAI Random Line",
     "MAISaveTextFile": "mAI Save Text File",
