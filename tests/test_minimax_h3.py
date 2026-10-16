@@ -76,12 +76,58 @@ def test_short_side_mode_is_768_and_both_dimensions_are_multiples_of_32():
     assert height % 32 == 0
 
 
+@pytest.mark.parametrize(
+    ("width", "height", "short_side", "multiple_of", "expected"),
+    [
+        (1920, 1080, 777, 1, (1381, 777)),
+        (1080, 1920, 777, 1, (777, 1381)),
+        (1920, 1080, 777, 32, (1376, 768)),
+        (1920, 1080, 777, 16, (1376, 784)),
+        (1920, 1080, 777, 7, (1379, 777)),
+        (1920, 1080, 1, 32, (32, 32)),
+        (1024, 1024, 777, 1, (777, 777)),
+    ],
+)
+def test_short_side_accepts_arbitrary_positive_integers(
+    width, height, short_side, multiple_of, expected
+):
+    assert calculate_short_side_dimensions(width, height, short_side, multiple_of) == expected
+
+
+@pytest.mark.parametrize("multiple_of", [1, 7, 16, 32, 64])
+def test_megapixel_mode_uses_selected_multiple(multiple_of):
+    width, height = calculate_minimax_h3_dimensions(1920, 1080, "1.0 MP", multiple_of)
+
+    assert width >= multiple_of
+    assert height >= multiple_of
+    assert width % multiple_of == 0
+    assert height % multiple_of == 0
+
+
+@pytest.mark.parametrize("value", [0, -1, 1.5, "32", None, True])
+def test_rejects_invalid_grid_multiple_in_both_modes(value):
+    with pytest.raises(ValueError, match="multiple_of must be a positive integer"):
+        calculate_minimax_h3_dimensions(1920, 1080, "1.0 MP", multiple_of=value)
+    with pytest.raises(ValueError, match="multiple_of must be a positive integer"):
+        calculate_short_side_dimensions(1920, 1080, multiple_of=value)
+
+
+@pytest.mark.parametrize("value", [0, -1, 1.5, "777", None, True])
+def test_rejects_invalid_short_side_target(value):
+    with pytest.raises(ValueError, match="short_side must be a positive integer"):
+        calculate_short_side_dimensions(1920, 1080, short_side=value)
+
+
 def test_parses_dropdown_label_and_numeric_value():
     assert parse_target_megapixels("0.7 MP") == 0.7
     assert parse_target_megapixels(0.7) == 0.7
 
 
-def test_node_resizes_with_comfyui_lanczos(monkeypatch):
+@pytest.mark.parametrize(
+    ("kwargs", "expected_width"),
+    [({}, 1376), ({"multiple_of": 64}, 1344), ({"multiple_of": 1}, 1365)],
+)
+def test_node_resizes_with_comfyui_lanczos(monkeypatch, kwargs, expected_width):
     calls = {}
     comfy_module = ModuleType("comfy")
     comfy_utils_module = ModuleType("comfy.utils")
@@ -102,18 +148,28 @@ def test_node_resizes_with_comfyui_lanczos(monkeypatch):
     monkeypatch.setitem(sys.modules, "comfy.utils", comfy_utils_module)
 
     image = torch.rand(2, 108, 192, 3)
-    output, = MAIPrepareImageForMinimaxH3().prepare(image, "1.0 MP")
+    output, = MAIPrepareImageForMinimaxH3().prepare(image, "1.0 MP", **kwargs)
 
-    assert output.shape == (2, 768, 1376, 3)
+    assert output.shape == (2, 768, expected_width, 3)
     assert calls == {
-        "width": 1376,
+        "width": expected_width,
         "height": 768,
         "method": "lanczos",
         "crop": "disabled",
     }
 
 
-def test_node_short_side_mode_bypasses_invalid_megapixel_value(monkeypatch):
+@pytest.mark.parametrize(
+    ("kwargs", "expected_width", "expected_height"),
+    [
+        ({}, 1280, 768),
+        ({"short_side": 777, "multiple_of": 1}, 1305, 777),
+        ({"short_side": 777, "multiple_of": 16}, 1312, 784),
+    ],
+)
+def test_node_short_side_mode_bypasses_invalid_megapixel_value(
+    monkeypatch, kwargs, expected_width, expected_height
+):
     calls = {}
     comfy_module = ModuleType("comfy")
     comfy_utils_module = ModuleType("comfy.utils")
@@ -138,12 +194,13 @@ def test_node_short_side_mode_bypasses_invalid_megapixel_value(monkeypatch):
         image,
         "not used",
         RESIZE_MODE_SHORT_SIDE_768,
+        **kwargs,
     )
 
-    assert output.shape == (1, 768, 1280, 3)
+    assert output.shape == (1, expected_height, expected_width, 3)
     assert calls == {
-        "width": 1280,
-        "height": 768,
+        "width": expected_width,
+        "height": expected_height,
         "method": "lanczos",
         "crop": "disabled",
     }
@@ -153,6 +210,20 @@ def test_node_keeps_megapixel_mode_as_default():
     inputs = MAIPrepareImageForMinimaxH3.INPUT_TYPES()["required"]
 
     assert inputs["resize_mode"][1]["default"] == RESIZE_MODE_MEGAPIXELS
+
+
+def test_node_exposes_integer_targets_with_compatible_defaults():
+    inputs = MAIPrepareImageForMinimaxH3.INPUT_TYPES()
+
+    assert list(inputs["required"]) == ["image", "target_megapixels", "resize_mode"]
+    for name, default in (("short_side", 768), ("multiple_of", 32)):
+        input_type, options = inputs["optional"][name]
+        assert input_type == "INT"
+        assert options["default"] == default
+        assert options["min"] == 1
+        assert options["step"] == 1
+    assert MAIPrepareImageForMinimaxH3.RETURN_TYPES == ("IMAGE",)
+    assert MAIPrepareImageForMinimaxH3.RETURN_NAMES == ("image",)
 
 
 def test_node_rejects_unknown_resize_mode():

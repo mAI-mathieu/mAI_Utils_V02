@@ -1,4 +1,5 @@
 import math
+import operator
 
 
 DIMENSION_MULTIPLE = 32
@@ -28,12 +29,25 @@ def parse_target_megapixels(value):
     return megapixels
 
 
-def calculate_minimax_h3_dimensions(width, height, target_megapixels):
-    """Return the closest proportional target dimensions on a 32-pixel grid."""
+def _positive_integer(value, name):
+    try:
+        result = operator.index(value)
+    except TypeError as error:
+        raise ValueError(f"{name} must be a positive integer") from error
+    if isinstance(value, bool) or result <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return result
+
+
+def calculate_minimax_h3_dimensions(
+    width, height, target_megapixels, multiple_of=DIMENSION_MULTIPLE
+):
+    """Return proportional target dimensions rounded to the selected pixel grid."""
     width = int(width)
     height = int(height)
     if width <= 0 or height <= 0:
         raise ValueError("image width and height must be greater than 0")
+    multiple_of = _positive_integer(multiple_of, "multiple_of")
 
     megapixels = parse_target_megapixels(target_megapixels)
     target_pixels = megapixels * PIXELS_PER_MEGAPIXEL
@@ -43,38 +57,39 @@ def calculate_minimax_h3_dimensions(width, height, target_megapixels):
     ideal_height = height * scale
 
     target_width = max(
-        DIMENSION_MULTIPLE,
-        int(math.floor(ideal_width / DIMENSION_MULTIPLE + 0.5)) * DIMENSION_MULTIPLE,
+        multiple_of,
+        int(math.floor(ideal_width / multiple_of + 0.5)) * multiple_of,
     )
     target_height = max(
-        DIMENSION_MULTIPLE,
-        int(math.floor(ideal_height / DIMENSION_MULTIPLE + 0.5)) * DIMENSION_MULTIPLE,
+        multiple_of,
+        int(math.floor(ideal_height / multiple_of + 0.5)) * multiple_of,
     )
 
     return target_width, target_height
 
 
-def calculate_short_side_dimensions(width, height, short_side=SHORT_SIDE_TARGET):
-    """Scale the short side exactly and round the long side to a 32-pixel grid."""
+def calculate_short_side_dimensions(
+    width, height, short_side=SHORT_SIDE_TARGET, multiple_of=DIMENSION_MULTIPLE
+):
+    """Scale to a short-side target, then round both dimensions to the pixel grid."""
     width = int(width)
     height = int(height)
-    short_side = int(short_side)
     if width <= 0 or height <= 0:
         raise ValueError("image width and height must be greater than 0")
-    if short_side <= 0 or short_side % DIMENSION_MULTIPLE != 0:
-        raise ValueError("short_side must be greater than 0 and a multiple of 32")
+    short_side = _positive_integer(short_side, "short_side")
+    multiple_of = _positive_integer(multiple_of, "multiple_of")
 
     scale = short_side / min(width, height)
     ideal_width = width * scale
     ideal_height = height * scale
 
     target_width = max(
-        DIMENSION_MULTIPLE,
-        int(math.floor(ideal_width / DIMENSION_MULTIPLE + 0.5)) * DIMENSION_MULTIPLE,
+        multiple_of,
+        int(math.floor(ideal_width / multiple_of + 0.5)) * multiple_of,
     )
     target_height = max(
-        DIMENSION_MULTIPLE,
-        int(math.floor(ideal_height / DIMENSION_MULTIPLE + 0.5)) * DIMENSION_MULTIPLE,
+        multiple_of,
+        int(math.floor(ideal_height / multiple_of + 0.5)) * multiple_of,
     )
 
     return target_width, target_height

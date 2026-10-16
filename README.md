@@ -931,13 +931,15 @@ mAI / Image
 
 Purpose:
 Resize an image for Minimax H3 while keeping its proportions as close as possible
-and ensuring that both output dimensions are multiples of 32.
+and rounding both output dimensions to a configurable pixel multiple.
 
 Inputs:
 
 * `image`
 * `target_megapixels` (`0.2 MP` through `2.0 MP` in `0.1 MP` steps)
 * `resize_mode` (`Target megapixels` or `Short side 768 px`)
+* optional `short_side` (positive integer, default `768`; used only in short-side mode)
+* optional `multiple_of` (positive integer, default `32`; applies in both modes)
 
 Output:
 
@@ -946,18 +948,28 @@ Output:
 Default behavior:
 
 * Targets approximately `1.0 MP` by default (`1024 × 1024` total pixels in ComfyUI's convention).
-* Calculates a proportional target size, then rounds width and height to the nearest multiples of 32.
+* Calculates a proportional target size, then rounds width and height to the nearest multiples of `multiple_of`, with a minimum of one multiple.
+* Missing optional inputs use `short_side=768` and `multiple_of=32` for existing workflows.
 * Uses Lanczos resampling without cropping.
 * Supports image batches.
 
-With `Short side 768 px` selected, the megapixel value is ignored. The shorter
-dimension is set to exactly 768 pixels and the longer dimension is rounded to
-the nearest multiple of 32.
+With `Short side 768 px` selected, the megapixel value is ignored. This mode name
+is retained for saved workflows; the editable `short_side` input sets the target
+and accepts any positive integer in steps of 1. The image is scaled to that target,
+then both dimensions are rounded to `multiple_of`. Use `multiple_of=1` to keep the
+shorter dimension exactly equal to `short_side`.
 
 Known limitations:
 
-* Rounding both dimensions to a 32-pixel grid can introduce a small aspect-ratio difference.
+* Grid rounding can change the requested short-side size and introduce an aspect-ratio difference.
 * The selected megapixel value is approximate because valid output dimensions are discrete.
+* Large target dimensions can require substantial image memory.
+
+Testing: run `python -m pytest tests/test_minimax_h3.py`. In ComfyUI, restart and
+add or reload this node under `mAI / Image`. For a 1920 × 1080 input, choose
+`Short side 768 px`, set `short_side=777` and `multiple_of=1`, and verify a
+1381 × 777 output. Set `multiple_of=32` to get 1376 × 768. The single `image`
+output and node registration (`MAIPrepareImageForMinimaxH3`) are unchanged.
 
 ## mAI Composite Layer
 
