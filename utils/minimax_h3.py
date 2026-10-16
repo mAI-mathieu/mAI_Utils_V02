@@ -6,8 +6,11 @@ DIMENSION_MULTIPLE = 32
 PIXELS_PER_MEGAPIXEL = 1024 * 1024
 MEGAPIXEL_OPTIONS = tuple(f"{value / 10:.1f} MP" for value in range(2, 21))
 RESIZE_MODE_MEGAPIXELS = "Target megapixels"
+RESIZE_MODE_SHORT_SIDE = "Short side"
+# Accepted by the backend for older saved/API workflows.
 RESIZE_MODE_SHORT_SIDE_768 = "Short side 768 px"
-RESIZE_MODE_OPTIONS = (RESIZE_MODE_MEGAPIXELS, RESIZE_MODE_SHORT_SIDE_768)
+RESIZE_MODE_OPTIONS = (RESIZE_MODE_MEGAPIXELS, RESIZE_MODE_SHORT_SIDE)
+RESIZE_ALGORITHM_OPTIONS = ("lanczos", "bicubic", "bilinear", "nearest-exact", "area")
 SHORT_SIDE_TARGET = 768
 
 

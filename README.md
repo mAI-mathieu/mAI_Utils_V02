@@ -937,9 +937,10 @@ Inputs:
 
 * `image`
 * `target_megapixels` (`0.2 MP` through `2.0 MP` in `0.1 MP` steps)
-* `resize_mode` (`Target megapixels` or `Short side 768 px`)
+* `resize_mode` (`Target megapixels` or `Short side`)
 * optional `short_side` (positive integer, default `768`; used only in short-side mode)
 * optional `multiple_of` (positive integer, default `32`; applies in both modes)
+* optional `resize_algorithm` (`lanczos`, `bicubic`, `bilinear`, `nearest-exact`, or `area`; default `lanczos`; applies in both modes)
 
 Output:
 
@@ -950,14 +951,16 @@ Default behavior:
 * Targets approximately `1.0 MP` by default (`1024 × 1024` total pixels in ComfyUI's convention).
 * Calculates a proportional target size, then rounds width and height to the nearest multiples of `multiple_of`, with a minimum of one multiple.
 * Missing optional inputs use `short_side=768` and `multiple_of=32` for existing workflows.
-* Uses Lanczos resampling without cropping.
+* Uses the selected resampling algorithm without cropping; defaults to Lanczos if omitted.
 * Supports image batches.
 
-With `Short side 768 px` selected, the megapixel value is ignored. This mode name
-is retained for saved workflows; the editable `short_side` input sets the target
-and accepts any positive integer in steps of 1. The image is scaled to that target,
+With `Short side` selected, the megapixel value is ignored. The editable
+`short_side` input sets the target and accepts any positive integer in steps of 1.
+The image is scaled to that target,
 then both dimensions are rounded to `multiple_of`. Use `multiple_of=1` to keep the
 shorter dimension exactly equal to `short_side`.
+Older saved workflows using `Short side 768 px` are migrated to `Short side` on
+load; the backend also accepts the old label for API workflows.
 
 Known limitations:
 
@@ -967,9 +970,10 @@ Known limitations:
 
 Testing: run `python -m pytest tests/test_minimax_h3.py`. In ComfyUI, restart and
 add or reload this node under `mAI / Image`. For a 1920 × 1080 input, choose
-`Short side 768 px`, set `short_side=777` and `multiple_of=1`, and verify a
+`Short side`, set `short_side=777` and `multiple_of=1`, and verify a
 1381 × 777 output. Set `multiple_of=32` to get 1376 × 768. The single `image`
 output and node registration (`MAIPrepareImageForMinimaxH3`) are unchanged.
+Switch `resize_algorithm` to compare resampling; the output dimensions stay the same.
 
 ## mAI Composite Layer
 

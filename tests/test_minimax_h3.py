@@ -7,7 +7,10 @@ import torch
 from nodes.prepare_image_for_minimax_h3 import MAIPrepareImageForMinimaxH3
 from utils.minimax_h3 import (
     MEGAPIXEL_OPTIONS,
+    RESIZE_ALGORITHM_OPTIONS,
     RESIZE_MODE_MEGAPIXELS,
+    RESIZE_MODE_OPTIONS,
+    RESIZE_MODE_SHORT_SIDE,
     RESIZE_MODE_SHORT_SIDE_768,
     calculate_minimax_h3_dimensions,
     calculate_short_side_dimensions,
@@ -127,7 +130,10 @@ def test_parses_dropdown_label_and_numeric_value():
     ("kwargs", "expected_width"),
     [({}, 1376), ({"multiple_of": 64}, 1344), ({"multiple_of": 1}, 1365)],
 )
-def test_node_resizes_with_comfyui_lanczos(monkeypatch, kwargs, expected_width):
+@pytest.mark.parametrize("algorithm", [None, *RESIZE_ALGORITHM_OPTIONS])
+def test_node_resizes_with_selected_comfyui_algorithm(
+    monkeypatch, kwargs, expected_width, algorithm
+):
     calls = {}
     comfy_module = ModuleType("comfy")
     comfy_utils_module = ModuleType("comfy.utils")
@@ -148,13 +154,16 @@ def test_node_resizes_with_comfyui_lanczos(monkeypatch, kwargs, expected_width):
     monkeypatch.setitem(sys.modules, "comfy.utils", comfy_utils_module)
 
     image = torch.rand(2, 108, 192, 3)
-    output, = MAIPrepareImageForMinimaxH3().prepare(image, "1.0 MP", **kwargs)
+    options = dict(kwargs)
+    if algorithm is not None:
+        options["resize_algorithm"] = algorithm
+    output, = MAIPrepareImageForMinimaxH3().prepare(image, "1.0 MP", **options)
 
     assert output.shape == (2, 768, expected_width, 3)
     assert calls == {
         "width": expected_width,
         "height": 768,
-        "method": "lanczos",
+        "method": algorithm or "lanczos",
         "crop": "disabled",
     }
 
@@ -165,10 +174,12 @@ def test_node_resizes_with_comfyui_lanczos(monkeypatch, kwargs, expected_width):
         ({}, 1280, 768),
         ({"short_side": 777, "multiple_of": 1}, 1305, 777),
         ({"short_side": 777, "multiple_of": 16}, 1312, 784),
+        ({"short_side": 777, "multiple_of": 1, "resize_algorithm": "bicubic"}, 1305, 777),
     ],
 )
+@pytest.mark.parametrize("resize_mode", [RESIZE_MODE_SHORT_SIDE, RESIZE_MODE_SHORT_SIDE_768])
 def test_node_short_side_mode_bypasses_invalid_megapixel_value(
-    monkeypatch, kwargs, expected_width, expected_height
+    monkeypatch, kwargs, expected_width, expected_height, resize_mode
 ):
     calls = {}
     comfy_module = ModuleType("comfy")
@@ -193,7 +204,7 @@ def test_node_short_side_mode_bypasses_invalid_megapixel_value(
     output, = MAIPrepareImageForMinimaxH3().prepare(
         image,
         "not used",
-        RESIZE_MODE_SHORT_SIDE_768,
+        resize_mode,
         **kwargs,
     )
 
@@ -201,7 +212,7 @@ def test_node_short_side_mode_bypasses_invalid_megapixel_value(
     assert calls == {
         "width": expected_width,
         "height": expected_height,
-        "method": "lanczos",
+        "method": kwargs.get("resize_algorithm", "lanczos"),
         "crop": "disabled",
     }
 
@@ -210,6 +221,28 @@ def test_node_keeps_megapixel_mode_as_default():
     inputs = MAIPrepareImageForMinimaxH3.INPUT_TYPES()["required"]
 
     assert inputs["resize_mode"][1]["default"] == RESIZE_MODE_MEGAPIXELS
+
+
+def test_node_shows_short_side_label_and_accepts_legacy_api_value():
+    inputs = MAIPrepareImageForMinimaxH3.INPUT_TYPES()
+
+    assert inputs["required"]["resize_mode"][0] == ["Target megapixels", "Short side"]
+    for mode in (*RESIZE_MODE_OPTIONS, RESIZE_MODE_SHORT_SIDE_768):
+        assert MAIPrepareImageForMinimaxH3.VALIDATE_INPUTS(mode) is True
+    assert MAIPrepareImageForMinimaxH3.VALIDATE_INPUTS("invalid") == "Unknown resize mode: invalid"
+    algorithms, options = inputs["optional"]["resize_algorithm"]
+    assert algorithms == ["lanczos", "bicubic", "bilinear", "nearest-exact", "area"]
+    assert options["default"] == "lanczos"
+
+
+@pytest.mark.parametrize("algorithm", ["invalid", "", None])
+def test_node_rejects_unknown_resize_algorithm_even_when_size_is_unchanged(algorithm):
+    image = torch.rand(1, 768, 768, 3)
+
+    with pytest.raises(ValueError, match="Unknown resize algorithm"):
+        MAIPrepareImageForMinimaxH3().prepare(
+            image, "1.0 MP", RESIZE_MODE_SHORT_SIDE, resize_algorithm=algorithm
+        )
 
 
 def test_node_exposes_integer_targets_with_compatible_defaults():

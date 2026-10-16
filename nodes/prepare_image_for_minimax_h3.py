@@ -2,8 +2,10 @@ try:
     from ..utils.minimax_h3 import (
         DIMENSION_MULTIPLE,
         MEGAPIXEL_OPTIONS,
+        RESIZE_ALGORITHM_OPTIONS,
         RESIZE_MODE_MEGAPIXELS,
         RESIZE_MODE_OPTIONS,
+        RESIZE_MODE_SHORT_SIDE,
         RESIZE_MODE_SHORT_SIDE_768,
         SHORT_SIDE_TARGET,
         calculate_minimax_h3_dimensions,
@@ -13,8 +15,10 @@ except ImportError:
     from utils.minimax_h3 import (
         DIMENSION_MULTIPLE,
         MEGAPIXEL_OPTIONS,
+        RESIZE_ALGORITHM_OPTIONS,
         RESIZE_MODE_MEGAPIXELS,
         RESIZE_MODE_OPTIONS,
+        RESIZE_MODE_SHORT_SIDE,
         RESIZE_MODE_SHORT_SIDE_768,
         SHORT_SIDE_TARGET,
         calculate_minimax_h3_dimensions,
@@ -38,7 +42,7 @@ class MAIPrepareImageForMinimaxH3:
                     list(RESIZE_MODE_OPTIONS),
                     {
                         "default": RESIZE_MODE_MEGAPIXELS,
-                        "tooltip": "Short side 768 px uses the editable short_side target.",
+                        "tooltip": "Short side uses the editable short_side target.",
                     },
                 ),
             },
@@ -63,8 +67,19 @@ class MAIPrepareImageForMinimaxH3:
                         "tooltip": "Round both output dimensions to the nearest multiple of this value. Use 1 for no grid rounding.",
                     },
                 ),
+                "resize_algorithm": (
+                    list(RESIZE_ALGORITHM_OPTIONS),
+                    {"default": "lanczos", "tooltip": "Resampling algorithm used in both resize modes."},
+                ),
             },
         }
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, resize_mode):
+        # Allow the old mode label without exposing it in the dropdown.
+        if resize_mode not in (*RESIZE_MODE_OPTIONS, RESIZE_MODE_SHORT_SIDE_768):
+            return f"Unknown resize mode: {resize_mode}"
+        return True
 
     def prepare(
         self,
@@ -73,9 +88,12 @@ class MAIPrepareImageForMinimaxH3:
         resize_mode=RESIZE_MODE_MEGAPIXELS,
         short_side=SHORT_SIDE_TARGET,
         multiple_of=DIMENSION_MULTIPLE,
+        resize_algorithm="lanczos",
     ):
         if image.dim() != 4:
             raise ValueError("image must have shape [batch, height, width, channels]")
+        if resize_algorithm not in RESIZE_ALGORITHM_OPTIONS:
+            raise ValueError(f"Unknown resize algorithm: {resize_algorithm}")
 
         height = image.shape[1]
         width = image.shape[2]
@@ -86,7 +104,7 @@ class MAIPrepareImageForMinimaxH3:
                 target_megapixels,
                 multiple_of=multiple_of,
             )
-        elif resize_mode == RESIZE_MODE_SHORT_SIDE_768:
+        elif resize_mode in (RESIZE_MODE_SHORT_SIDE, RESIZE_MODE_SHORT_SIDE_768):
             target_width, target_height = calculate_short_side_dimensions(
                 width, height, short_side=short_side, multiple_of=multiple_of
             )
@@ -103,7 +121,7 @@ class MAIPrepareImageForMinimaxH3:
             channels_first,
             target_width,
             target_height,
-            "lanczos",
+            resize_algorithm,
             "disabled",
         )
         return (resized.movedim(1, -1),)
