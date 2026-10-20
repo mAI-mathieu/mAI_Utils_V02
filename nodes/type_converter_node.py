@@ -1,35 +1,69 @@
+if __package__ == "nodes":
+    from utils.seeded_noise import MAISeededNoise
+else:
+    from ..utils.seeded_noise import MAISeededNoise
+
+
+_UNCONNECTED = object()
+_SOURCE_TYPES = (str, int, float, bool)
+
+
 class MAITypeConverterNode:
     CATEGORY = "mAI / Utils"
-    RETURN_TYPES = ("BOOLEAN", "STRING", "INT", "FLOAT")
-    RETURN_NAMES = ("boolean", "string", "int", "float")
+    RETURN_TYPES = ("BOOLEAN", "STRING", "INT", "FLOAT", "NOISE")
+    RETURN_NAMES = ("boolean", "string", "int", "float", "noise")
     FUNCTION = "convert"
+    DESCRIPTION = (
+        "Connect a string, integer, float or boolean to value for automatic "
+        "source detection. Without value, use source_type and the manual fields. "
+        "The noise output uses the converted integer as a seed for "
+        "SamplerCustomAdvanced."
+    )
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "source_type": (["string", "int", "float", "boolean"], {"default": "string"}),
+                "source_type": (["auto", "string", "int", "float", "boolean"], {
+                    "default": "auto",
+                    "tooltip": "Fallback source when value is disconnected. Auto uses the string field.",
+                }),
                 "boolean": ("BOOLEAN", {"default": False}),
                 "string": ("STRING", {"default": ""}),
-                "int": ("INT", {"default": 0}),
+                "int": ("INT", {"default": 0, "min": -0x8000000000000000, "max": 0xffffffffffffffff}),
                 "float": ("FLOAT", {"default": 0.0}),
                 "strict": ("BOOLEAN", {"default": False}),
-            }
+            },
+            "optional": {
+                "value": ("*", {
+                    "tooltip": "Automatically detects STRING, INT, FLOAT or BOOLEAN; overrides the manual source.",
+                }),
+            },
         }
 
-    def convert(self, source_type, boolean, string, int, float, strict):
-        value = self._select_source(source_type, boolean, string, int, float)
+    def convert(self, source_type="auto", boolean=False, string="", int=0,
+                float=0.0, strict=False, value=_UNCONNECTED):
+        value = self._select_source(source_type, boolean, string, int, float, value)
+        integer = self._to_int(value, strict)
         return (
             self._to_bool(value, strict),
             self._to_string(value),
-            self._to_int(value, strict),
+            integer,
             self._to_float(value, strict),
+            MAISeededNoise(integer),
         )
 
-    def _select_source(self, source_type, boolean, string, int, float):
+    def _select_source(self, source_type, boolean, string, int, float, value=_UNCONNECTED):
+        if value is not _UNCONNECTED:
+            if not isinstance(value, _SOURCE_TYPES):
+                raise ValueError(
+                    "value must be a STRING, INT, FLOAT or BOOLEAN; "
+                    f"received {type(value).__name__}."
+                )
+            return value
         if source_type == "boolean":
             return boolean
-        if source_type == "string":
+        if source_type in {"auto", "string"}:
             return string
         if source_type == "int":
             return int
@@ -73,15 +107,24 @@ class MAITypeConverterNode:
         if isinstance(value, int):
             return value
         if isinstance(value, float):
-            return int(value)
+            try:
+                return int(value)
+            except (ValueError, OverflowError):
+                if strict:
+                    raise ValueError(f"Cannot convert float to int: {value}") from None
+                return 0
         if isinstance(value, str):
             text = value.strip()
             try:
-                return int(float(text))
+                # Preserve all 64 seed bits before trying decimal/scientific text.
+                return int(text)
             except ValueError:
-                if strict:
-                    raise ValueError(f"Cannot convert string to int: {value}")
-                return 0
+                try:
+                    return int(float(text))
+                except (ValueError, OverflowError):
+                    if strict:
+                        raise ValueError(f"Cannot convert string to int: {value}") from None
+                    return 0
 
         if strict:
             raise ValueError(f"Cannot convert value to int: {value}")

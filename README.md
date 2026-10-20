@@ -5,6 +5,41 @@ ComfyUI custom node pack for small, reusable mAI utility nodes.
 Install this folder under ComfyUI's `custom_nodes` directory, then restart ComfyUI.
 The currently registered nodes are listed below.
 
+## mAI Type Converter
+
+Location: `mAI / Utils`. Registered as `MAITypeConverterNode`.
+Connect a STRING, INT, FLOAT or BOOLEAN output to the optional `value` input:
+the converter automatically detects its type and gives it priority over the
+manual fields. No source selection is needed for a connected `value`.
+
+Without `value`, `source_type` selects the existing `boolean`, `string`, `int`
+or `float` field. The new default, `auto`, uses `string` (empty by default).
+Saved workflows retain their manual source selection. `strict` defaults to
+false: invalid conversions return false/0/0.0; strict mode raises an error.
+Unsupported types connected to `value` always raise a clear error.
+
+Outputs, in order: `boolean` (BOOLEAN), `string` (STRING), `int` (INT),
+`float` (FLOAT), `noise` (NOISE). The first four sockets keep their existing
+names, types and positions. `noise` is a seeded noise generator, equivalent to
+ComfyUI's RandomNoise for the same seed, and connects directly to
+**SamplerCustomAdvanced → noise**. It creates noise when the sampler supplies
+its latent, including any batch indices; it does not output a noise tensor.
+
+The converted integer is the noise seed. Integer strings preserve all 64 bits;
+decimal/scientific strings and floats truncate toward zero. Negative integers
+and integers outside the unsigned 64-bit range wrap modulo `2**64` for `noise`
+only. Invalid numeric text in non-strict mode uses seed 0. Booleans use 0/1.
+Floats can already have lost integer precision; use INT or integer text for
+large exact seeds. No new dependencies or frontend extension are required.
+
+Test in ComfyUI: restart and refresh the browser, add **mAI Type Converter**,
+connect an INT seed to `value`, and connect `noise` to SamplerCustomAdvanced's
+`noise` input. Compare against RandomNoise with the same seed and the same
+remaining sampler inputs. Try STRING, FLOAT and BOOLEAN sources, and reload
+an existing workflow to check its manual source and original output links.
+Isolated tests (without importing the rest of the pack):
+`python -m pytest --confcutdir=tests tests/test_type_converter_node.py tests/test_seeded_noise.py`.
+
 ## mAI Mask Smart Crop / mAI Mask Smart Stitch
 
 Location: `mAI / Mask`. Registered as `MAIMaskSmartCrop` and
