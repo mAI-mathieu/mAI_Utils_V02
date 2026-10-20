@@ -25,9 +25,8 @@ def parse_target_megapixels(value):
     except (TypeError, ValueError) as error:
         raise ValueError(f"Invalid target megapixel value: {value}") from error
 
-    valid_values = {option / 10 for option in range(2, 21)}
-    if megapixels not in valid_values:
-        raise ValueError("target_megapixels must be from 0.2 MP to 2.0 MP in 0.1 MP steps")
+    if isinstance(value, bool) or not math.isfinite(megapixels) or not 0.2 <= megapixels <= 2.0:
+        raise ValueError("target_megapixels must be a finite number from 0.2 MP to 2.0 MP")
 
     return megapixels
 

@@ -936,7 +936,7 @@ and rounding both output dimensions to a configurable pixel multiple.
 Inputs:
 
 * `image`
-* `target_megapixels` (`0.2 MP` through `2.0 MP` in `0.1 MP` steps)
+* `target_megapixels` (float from `0.2` through `2.0` MP, default `1.0`, UI step `0.01`; accepts values such as `1.25`)
 * `resize_mode` (`Target megapixels` or `Short side`)
 * optional `short_side` (positive integer, default `768`; used only in short-side mode)
 * optional `multiple_of` (positive integer, default `32`; applies in both modes)
@@ -961,6 +961,8 @@ then both dimensions are rounded to `multiple_of`. Use `multiple_of=1` to keep t
 shorter dimension exactly equal to `short_side`.
 Older saved workflows using `Short side 768 px` are migrated to `Short side` on
 load; the backend also accepts the old label for API workflows.
+Older saved megapixel dropdown values such as `1.0 MP` are converted to floats
+on load. API workflows should supply `target_megapixels` as a number.
 
 Known limitations:
 
@@ -974,6 +976,7 @@ add or reload this node under `mAI / Image`. For a 1920 × 1080 input, choose
 1381 × 777 output. Set `multiple_of=32` to get 1376 × 768. The single `image`
 output and node registration (`MAIPrepareImageForMinimaxH3`) are unchanged.
 Switch `resize_algorithm` to compare resampling; the output dimensions stay the same.
+Select `Target megapixels` and enter `1.25` to verify the editable float target.
 
 ## mAI Composite Layer
 

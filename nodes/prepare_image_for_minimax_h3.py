@@ -1,7 +1,6 @@
 try:
     from ..utils.minimax_h3 import (
         DIMENSION_MULTIPLE,
-        MEGAPIXEL_OPTIONS,
         RESIZE_ALGORITHM_OPTIONS,
         RESIZE_MODE_MEGAPIXELS,
         RESIZE_MODE_OPTIONS,
@@ -14,7 +13,6 @@ try:
 except ImportError:
     from utils.minimax_h3 import (
         DIMENSION_MULTIPLE,
-        MEGAPIXEL_OPTIONS,
         RESIZE_ALGORITHM_OPTIONS,
         RESIZE_MODE_MEGAPIXELS,
         RESIZE_MODE_OPTIONS,
@@ -37,7 +35,10 @@ class MAIPrepareImageForMinimaxH3:
         return {
             "required": {
                 "image": ("IMAGE",),
-                "target_megapixels": (list(MEGAPIXEL_OPTIONS), {"default": "1.0 MP"}),
+                "target_megapixels": (
+                    "FLOAT",
+                    {"default": 1.0, "min": 0.2, "max": 2.0, "step": 0.01},
+                ),
                 "resize_mode": (
                     list(RESIZE_MODE_OPTIONS),
                     {

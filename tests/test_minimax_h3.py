@@ -126,6 +126,22 @@ def test_parses_dropdown_label_and_numeric_value():
     assert parse_target_megapixels(0.7) == 0.7
 
 
+@pytest.mark.parametrize("value", [0.2, 0.25, 0.725, 1.25, 2.0])
+def test_accepts_float_targets_between_old_dropdown_steps(value):
+    assert parse_target_megapixels(value) == value
+    width, height = calculate_minimax_h3_dimensions(1920, 1080, value, multiple_of=1)
+    assert width * height == pytest.approx(value * 1024 * 1024, rel=0.005)
+
+
+def test_node_exposes_float_megapixel_target():
+    input_type, options = MAIPrepareImageForMinimaxH3.INPUT_TYPES()["required"]["target_megapixels"]
+    assert input_type == "FLOAT"
+    assert options == {"default": 1.0, "min": 0.2, "max": 2.0, "step": 0.01}
+    image = torch.zeros(1, 512, 512, 3)
+    output, = MAIPrepareImageForMinimaxH3().prepare(image, 0.25)
+    assert output is image
+
+
 @pytest.mark.parametrize(
     ("kwargs", "expected_width"),
     [({}, 1376), ({"multiple_of": 64}, 1344), ({"multiple_of": 1}, 1365)],
@@ -266,7 +282,10 @@ def test_node_rejects_unknown_resize_mode():
         MAIPrepareImageForMinimaxH3().prepare(image, "1.0 MP", "invalid")
 
 
-@pytest.mark.parametrize("value", ["0.1 MP", "2.1 MP", "invalid", None])
+@pytest.mark.parametrize(
+    "value",
+    ["0.1 MP", "2.1 MP", "invalid", None, 0.199, 2.001, float("nan"), float("inf"), True, False],
+)
 def test_rejects_invalid_megapixel_values(value):
     with pytest.raises(ValueError):
         parse_target_megapixels(value)
