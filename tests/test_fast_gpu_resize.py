@@ -29,7 +29,7 @@ def test_node_contract_and_defaults():
     assert node.RETURN_NAMES == ("image", "width", "height", "method_used")
     assert inputs["multiple_of"][0] == "INT"
     assert inputs["multiple_of"][1]["min"] == 1
-    assert inputs["resize_mode"][0] == ["exact", "keep_aspect_fit", "keep_aspect_fill", "keep_aspect"]
+    assert inputs["resize_mode"][0] == ["exact", "keep_aspect_fit", "keep_aspect_fill", "keep_aspect", "pad_to_multiple"]
     assert inputs["resize_mode"][1]["default"] == "exact"
     defaults = {name:spec[1]["default"] for name,spec in inputs.items() if name != "image"}
     image = torch.ones(1,720,1280,3)
@@ -47,6 +47,18 @@ def test_node_keep_aspect_returns_actual_dimensions_without_padding():
     assert result.shape == (2, 18, 32, 3)
     assert (w, h, used) == (32, 18, "nearest")
     assert result.eq(1).all()
+
+
+def test_node_pad_to_multiple_preserves_original_dimensions_and_pixels():
+    image = torch.randn(2, 9, 19, 3)
+    result, w, h, used = MAIFastGPUResize().run(
+        image, 4, 64, resize_mode="pad_to_multiple", multiple_of=8,
+    )
+    assert result.shape == (2, 16, 24, 3)
+    assert (w, h, used) == (24, 16, "identity")
+    assert torch.equal(result[:, 3:12, 2:21], image)
+    assert not result[:, :3].any() and not result[:, 12:].any()
+    assert not result[:, :, :2].any() and not result[:, :, 21:].any()
 
 
 @pytest.mark.parametrize("precision,dtype", [("fp32",torch.float32),("fp16",torch.float16),("bf16",torch.bfloat16)])

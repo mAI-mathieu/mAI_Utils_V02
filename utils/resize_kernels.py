@@ -11,7 +11,7 @@ import torch.nn.functional as F
 NATIVE_METHODS = ("nearest", "nearest-exact", "bilinear", "bicubic", "area")
 CUSTOM_METHODS = ("lanczos2", "lanczos3", "lanczos4", "mitchell", "catmull_rom")
 RESIZE_METHODS = ("auto",) + NATIVE_METHODS + CUSTOM_METHODS
-RESIZE_MODES = ("exact", "keep_aspect_fit", "keep_aspect_fill", "keep_aspect")
+RESIZE_MODES = ("exact", "keep_aspect_fit", "keep_aspect_fill", "keep_aspect", "pad_to_multiple")
 # Custom passes hold only one sampled plane per tap. Bound their batch working
 # set conservatively, independently of free VRAM, without probing for OOM.
 CUSTOM_WORKING_BYTES = 512 * 1024 * 1024
@@ -30,6 +30,13 @@ def apply_multiple_of(dimension, multiple_of=1):
     return max(multiple_of, ((dimension + multiple_of // 2) // multiple_of) * multiple_of)
 
 
+def round_up_to_multiple(dimension, multiple_of=1):
+    """Smallest multiple at least as large as dimension; never shrink."""
+    dimension = _positive_integer(dimension, "Dimension")
+    multiple_of = _positive_integer(multiple_of, "multiple_of")
+    return ((dimension + multiple_of - 1) // multiple_of) * multiple_of
+
+
 @dataclass(frozen=True)
 class ResizeGeometry:
     width: int
@@ -43,6 +50,12 @@ def calculate_target_size(source_width, source_height, width, height,
     """Resolve canvas geometry, or fitted image dimensions for keep_aspect."""
     source_width = _positive_integer(source_width, "Source width")
     source_height = _positive_integer(source_height, "Source height")
+    if resize_mode == "pad_to_multiple":
+        return ResizeGeometry(
+            round_up_to_multiple(source_width, multiple_of),
+            round_up_to_multiple(source_height, multiple_of),
+            source_width, source_height,
+        )
     width = apply_multiple_of(width, multiple_of)
     height = apply_multiple_of(height, multiple_of)
     if resize_mode not in RESIZE_MODES:
@@ -161,7 +174,7 @@ def resize_native(x, size, method, antialias=True):
 
 
 def _finish_geometry(x, geometry, resize_mode):
-    if resize_mode == "keep_aspect_fit":
+    if resize_mode in ("keep_aspect_fit", "pad_to_multiple"):
         dw = geometry.width - x.shape[3]
         dh = geometry.height - x.shape[2]
         if dw or dh:

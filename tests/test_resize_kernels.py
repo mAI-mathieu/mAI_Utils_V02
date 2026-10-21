@@ -7,7 +7,8 @@ import torch.nn.functional as F
 from utils.resize_kernels import (
     CUSTOM_METHODS, NATIVE_METHODS, RESIZE_METHODS, apply_multiple_of,
     bc_cubic_kernel, build_sampling_weights, calculate_target_size,
-    choose_chunk_size, lanczos_kernel, resize_image_batch, select_auto_resize_method,
+    choose_chunk_size, lanczos_kernel, resize_image_batch, round_up_to_multiple,
+    select_auto_resize_method,
 )
 
 
@@ -133,6 +134,62 @@ def test_multiple_rounding(dimension, multiple, expected):
     assert apply_multiple_of(dimension, multiple) == expected
 
 
+@pytest.mark.parametrize("dimension,multiple,expected", [
+    (1019, 8, 1024), (1024, 8, 1024), (1025, 8, 1032),
+    (1, 64, 64), (7, 3, 9), (19, 1, 19),
+])
+def test_round_up_to_multiple(dimension, multiple, expected):
+    assert round_up_to_multiple(dimension, multiple) == expected
+
+
+@pytest.mark.parametrize("dimension,multiple", [(0, 8), (3, 0), (True, 8), (3, 1.5)])
+def test_round_up_to_multiple_rejects_invalid_values(dimension, multiple):
+    with pytest.raises(ValueError):
+        round_up_to_multiple(dimension, multiple)
+
+
+@pytest.mark.parametrize("source,multiple,expected", [
+    ((1019, 769), 8, (1024, 776)),
+    ((16, 9), 8, (16, 16)),
+    ((16, 24), 8, (16, 24)),
+    ((1, 1), 64, (64, 64)),
+    ((7, 5), 3, (9, 6)),
+    ((19, 9), 1, (19, 9)),
+])
+def test_pad_to_multiple_geometry_uses_original_dimensions(source, multiple, expected):
+    geometry = calculate_target_size(*source, 4, 64, "pad_to_multiple", multiple)
+    assert (geometry.width, geometry.height) == expected
+    assert (geometry.resize_width, geometry.resize_height) == source
+
+
+@pytest.mark.parametrize("method", RESIZE_METHODS)
+@pytest.mark.parametrize("chunk_size", [0, 2])
+def test_pad_to_multiple_copies_pixels_exactly_without_filtering(method, chunk_size, monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Padding must not invoke resize kernels")
+
+    monkeypatch.setattr("utils.resize_kernels.resize_native", forbidden)
+    monkeypatch.setattr("utils.resize_kernels.build_sampling_weights", forbidden)
+    # Noncontiguous RGBA with out-of-range pixels catches resampling/clamping.
+    image = torch.randn(3, 18, 38, 4)[:, ::2, ::2]
+    before = image.clone()
+    result, w, h, used = resize_image_batch(
+        image, 4, 64, "pad_to_multiple", method, multiple_of=8, chunk_size=chunk_size,
+    )
+    assert (w, h, used) == (24, 16, "identity")
+    expected = torch.zeros(3, 16, 24, 4)
+    expected[:, 3:12, 2:21] = image
+    assert torch.equal(result, expected)
+    assert torch.equal(image, before)
+
+
+@pytest.mark.parametrize("multiple", [1, 8])
+def test_pad_to_multiple_aligned_image_reuses_original(multiple):
+    image = torch.randn(2, 16, 24, 3)
+    result, w, h, used = resize_image_batch(image, 1, 1, "pad_to_multiple", multiple_of=multiple)
+    assert result is image and (w, h, used) == (24, 16, "identity")
+
+
 @pytest.mark.parametrize("mode", ["exact", "keep_aspect_fit", "keep_aspect_fill"])
 def test_canvas_multiple_of(mode):
     result, w, h, _ = resize_image_batch(torch.ones(1, 3, 7, 1), 11, 13, mode, multiple_of=8)
@@ -212,6 +269,22 @@ def test_kernel_definitions_and_support():
 
 
 DEVICES = ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])
+
+
+@pytest.mark.parametrize("device", DEVICES)
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16, torch.float64])
+def test_pad_to_multiple_preserves_dtype_device_and_honors_precision(device, dtype):
+    image = torch.randn(2, 3, 7, 3, device=device, dtype=dtype)
+    result = resize_image_batch(image, 1, 1, "pad_to_multiple", multiple_of=4)[0]
+    assert result.dtype == dtype and result.device == image.device
+    assert torch.equal(result[:, :3, :7], image)
+    assert not result[:, 3:].any() and not result[:, :, 7:].any()
+    converted = resize_image_batch(
+        image, 1, 1, "pad_to_multiple", multiple_of=4,
+        compute_device="cpu", precision="fp32", chunk_size=1,
+    )[0]
+    assert converted.dtype == torch.float32 and converted.device.type == "cpu"
+    assert torch.equal(converted[:, :3, :7], image.cpu().float())
 
 
 @pytest.mark.parametrize("device", DEVICES)

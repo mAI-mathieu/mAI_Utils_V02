@@ -6,6 +6,14 @@ device helper at execution time. `utils/resize_kernels.py` contains geometry,
 method selection, dtype handling, sampling and batching with no ComfyUI dependency.
 Registration adds only `MAIFastGPUResize` to the existing root mappings.
 
+`pad_to_multiple` derives the canvas from the source dimensions, rounding each
+up to the smallest multiple at least as large as the source. Requested width
+and height are ignored. Resize dimensions stay equal to the source, so the
+existing identity filtering bypass and centered zero padding preserve original
+pixels (unless an explicit dtype conversion is requested). Already aligned
+dimensions are unchanged. Existing modes retain nearest-multiple rounding.
+The mode is appended to the existing dropdown; defaults and sockets are unchanged.
+
 BHWC input is permuted to BCHW as a view; no unconditional contiguous copy is
 made. Native methods call `torch.nn.functional.interpolate`. Custom methods
 use two one-dimensional passes. The pass with the smaller intermediate runs

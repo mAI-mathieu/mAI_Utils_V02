@@ -40,7 +40,8 @@ class MAIFastGPUResize:
         "Batched torch resize with native, Lanczos and BC cubic kernels. "
         "Auto device keeps the input device; select gpu to move CPU images to CUDA. "
         "Keep aspect fits within width/height without padding or cropping. "
-        "Fit pads black; fill crops from the center."
+        "Fit pads black; fill crops from the center. "
+        "Pad to multiple keeps the original image size and only adds black padding."
     )
 
     @classmethod
@@ -50,11 +51,11 @@ class MAIFastGPUResize:
             "width": ("INT", {"default": 1280, "min": 1, "max": 16384}),
             "height": ("INT", {"default": 720, "min": 1, "max": 16384}),
             "resize_mode": (list(RESIZE_MODES), {"default": "exact",
-                                               "tooltip": "keep_aspect fits within width/height without padding or cropping; output dimensions may differ. Use multiple_of=1 for the closest original ratio."}),
+                                               "tooltip": "keep_aspect fits within width/height without padding or cropping. pad_to_multiple ignores width/height and preserves original image size, adding centered black padding to the next multiple_of."}),
             "method": (list(RESIZE_METHODS), {"default": "auto"}),
             "antialias": ("BOOLEAN", {"default": True}),
             "multiple_of": ("INT", {"default": 1, "min": 1, "max": 16384, "step": 1,
-                                    "tooltip": "Round output width and height to the nearest multiple of this number. 1 disables rounding; ties round upward."}),
+                                    "tooltip": "Round output width and height to the nearest multiple; ties round upward. pad_to_multiple only pads original dimensions upward, leaving aligned dimensions unchanged. 1 disables rounding/padding."}),
             "device": (["auto", "gpu", "cpu"], {"default": "auto"}),
             "precision": (["auto", "fp32", "fp16", "bf16"], {"default": "auto"}),
             "chunk_size": ("INT", {"default": 0, "min": 0, "max": 1000000,

@@ -307,6 +307,17 @@ to an INT output), ties upward, minimum one multiple. Common choices are
 8/16/32/64; 1 disables rounding. For multiple 8: 1023→1024, 1020→1024,
 1019→1016. Any integer in the widget range is supported, such as 3 or 128.
 
+Use `resize_mode=pad_to_multiple` to keep the original picture at exactly its
+original size and only extend the canvas to the next `multiple_of`. Width and
+height inputs are ignored in this mode. For example, a 1019×769 image with
+`multiple_of=8` becomes 1024×776, with the original centered inside black padding.
+Already aligned dimensions stay unchanged; `multiple_of=1` adds no padding.
+Extra pixels go on the bottom/right when padding is odd. No resampling or
+clamping occurs, regardless of `method` or `antialias`; `method_used` reports
+`identity` because filtering is bypassed. With `precision=auto`, original pixel
+values are copied exactly. Explicit precision changes still convert pixel dtype.
+Padding fills all channels with zero (transparent black for RGBA).
+
 Methods: `nearest`, `nearest-exact`, `bilinear`, `bicubic`, `area`, true
 `lanczos2`/`lanczos3`/`lanczos4`, `mitchell` (B=C=1/3), `catmull_rom`
 (B=0, C=1/2), and `auto`. Auto chooses Lanczos3 if either resize scale ≤0.65,
@@ -352,6 +363,8 @@ to Preview Image or a video encoder. Check frame order and the width/height/
 method diagnostics. Try 1024×1024 with fit/fill and chunk size 32; save and
 reload the workflow. Try `keep_aspect` on a 16:9 image with width/height 1024,
 `multiple_of=1`: verify a 1024×576 output with no borders or cropping.
+Try `pad_to_multiple` with `multiple_of=64` on a 1019×769 image: verify a
+1024×832 canvas with the original image unchanged at the center.
 Automated tests:
 `python -m pytest tests/test_resize_kernels.py tests/test_fast_gpu_resize.py tests/test_gpu_memory.py`.
 Benchmark: `python scripts/benchmark_fast_gpu_resize.py --direct` (CUDA), or
