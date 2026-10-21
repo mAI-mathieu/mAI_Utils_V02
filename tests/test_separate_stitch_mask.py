@@ -215,7 +215,7 @@ def test_bounded_mode_batch_broadcast_empty_mask_and_context(cropandstitch_class
     assert render.count_nonzero() == 0
 
 
-def test_bounded_mode_includes_expanded_stitch_mask_and_rejects_oversize(cropandstitch_classes):
+def test_bounded_mode_includes_expanded_stitch_mask_and_downscales_oversize(cropandstitch_classes):
     node_class, _ = cropandstitch_classes
     image = torch.zeros(1, 128, 128, 3)
     mask = torch.zeros(1, 128, 128)
@@ -230,9 +230,74 @@ def test_bounded_mode_includes_expanded_stitch_mask_and_rejects_oversize(cropand
     assert blend.count_nonzero() > render.count_nonzero()
     assert (blend[:, 0] == 0).all()
     inputs["mask"] = torch.ones_like(mask)
-    with pytest.raises(ValueError, match="do not fit"):
-        node_class().inpaint_crop(use_mask_max_size=True, max_crop_width=64,
-                                max_crop_height=64, crop_multiple_of=16, **inputs)
+    stitcher, crop, render, blend = node_class().inpaint_crop(
+        use_mask_max_size=True, max_crop_width=64, max_crop_height=64, crop_multiple_of=16,
+        stitch_mask_blend_pixels=0, **inputs,
+    )
+    assert crop.shape == (1, 64, 64, 3)
+    assert (render == 1).all() and (blend == 1).all()
+    assert stitcher["cropped_to_canvas_w"] == [128]
+    assert stitcher["cropped_to_canvas_h"] == [128]
+
+
+@pytest.mark.parametrize("stitch_mode", ["rectangle (full crop)", "extended mask"])
+@pytest.mark.parametrize("device_mode", ["cpu (compatible)", "gpu (much faster)"])
+def test_reported_oversize_mask_resizes_both_masks_and_stitches_to_source(
+    cropandstitch_classes, stitch_mode, device_mode,
+):
+    node_class, upstream = cropandstitch_classes
+    image = torch.zeros(1, 1450, 1400, 3)
+    mask = torch.zeros(1, 1450, 1400)
+    mask[:, 50:1338, 100:1316] = 1
+    inputs = _crop_inputs(image, mask)
+    inputs["device_mode"] = device_mode
+    stitcher, crop, render, blend = node_class().inpaint_crop(
+        use_mask_max_size=True, max_crop_width=1024, max_crop_height=1024, crop_multiple_of=64,
+        stitch_mask_mode=stitch_mode, stitch_mask_expand_pixels=0, stitch_mask_blend_pixels=0,
+        **inputs,
+    )
+    assert crop.shape == (1, 1024, 1024, 3)
+    assert render.shape == blend.shape == (1, 1024, 1024)
+    x, y = stitcher["cropped_to_canvas_x"][0], stitcher["cropped_to_canvas_y"][0]
+    w, h = stitcher["cropped_to_canvas_w"][0], stitcher["cropped_to_canvas_h"][0]
+    assert (x, y, w, h) == (64, 50, 1288, 1288)
+    reference_mask = upstream.CPUProcessorLogic().rescale_m(
+        mask[:, y:y+h, x:x+w], 1024, 1024, "bilinear",
+    )
+    assert torch.equal(render, reference_mask)
+    assert torch.equal(blend[0], stitcher["cropped_mask_for_blend"][0][0])
+    if stitch_mode == "extended mask":
+        assert torch.equal(blend, reference_mask)
+    edited, = upstream.InpaintStitchImproved().inpaint_stitch(stitcher, torch.ones_like(crop))
+    assert edited.shape == image.shape
+    assert (edited[:, 60:1328, 110:1306] == 1).all()
+    outside = torch.ones_like(mask, dtype=torch.bool)
+    outside[:, y:y+h, x:x+w] = False
+    assert torch.equal(edited[outside], image[outside])
+
+
+def test_oversize_batch_context_and_masks_share_output_dimensions(cropandstitch_classes):
+    node_class, upstream = cropandstitch_classes
+    image = torch.zeros(1, 150, 200, 3)
+    mask = torch.zeros(2, 150, 200)
+    mask[0, :10, :10] = 1
+    mask[1, 60:, 100:] = 1
+    context = torch.zeros_like(mask)
+    context[0, :20, :80] = 1
+    inputs = _crop_inputs(image, mask)
+    inputs["optional_context_mask"] = context
+    stitcher, crop, render, blend = node_class().inpaint_crop(
+        use_mask_max_size=True, max_crop_width=64, max_crop_height=64, crop_multiple_of=16,
+        stitch_mask_blend_pixels=0, **inputs,
+    )
+    assert crop.shape == (2, 64, 64, 3)
+    assert render.shape == blend.shape == (2, 64, 64)
+    assert stitcher["cropped_to_canvas_x"] == [0, 100]
+    assert stitcher["cropped_to_canvas_y"] == [0, 50]
+    assert stitcher["cropped_to_canvas_w"] == [100, 100]
+    restored, = upstream.InpaintStitchImproved().inpaint_stitch(stitcher, crop)
+    assert restored.shape == (2, 150, 200, 3)
+    assert restored.count_nonzero() == 0
 
 
 def test_bounded_mode_accepts_load_image_empty_placeholder_masks(cropandstitch_classes):

@@ -75,7 +75,8 @@ class MAIInpaintCropSeparateStitchMask(_UPSTREAM.InpaintCropImproved):
         input_types["required"]["use_mask_max_size"] = (
             "BOOLEAN",
             {"default": False, "tooltip": (
-                "Extend around the mask at native resolution within the source image. "
+                "Extend around the mask within the source image, downscaling oversize masks "
+                "to the maximum output dimensions. "
                 "Overrides pre-resize, outpainting, context growth, output resizing and padding."
             )},
         )

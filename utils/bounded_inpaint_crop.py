@@ -2,7 +2,7 @@
 
 import torch
 
-from .bounded_crop_geometry import bounded_crop_box
+from .bounded_crop_geometry import bounded_crop_layout
 from .separate_stitch_mask import (
     broadcast_inputs, feather_mask, full_crop_feather_mask, normalize_mask,
 )
@@ -10,7 +10,7 @@ from .separate_stitch_mask import (
 
 def bounded_inpaint_crop(inputs, processor, device, max_width, max_height, multiple_of,
                          stitch_mask_mode, stitch_expand_pixels, stitch_blend_pixels):
-    """Keep upstream mask preprocessing while replacing resizing and canvas growth."""
+    """Keep masks complete and downscale oversize source regions to output limits."""
     source_image = inputs["image"]
     if source_image.ndim != 4:
         raise ValueError("image must have shape [B,H,W,C]")
@@ -46,7 +46,7 @@ def bounded_inpaint_crop(inputs, processor, device, max_width, max_height, multi
             "cropped_to_canvas_w", "cropped_to_canvas_h", "cropped_mask_for_blend",
         )},
     }
-    crops, masks, blend_masks = [], [], []
+    processed_masks, stitch_masks, bboxes = [], [], []
     for index in range(image.shape[0]):
         mask = render_mask[index:index + 1].to(device)
         context = context_mask[index:index + 1].to(device)
@@ -78,19 +78,37 @@ def bounded_inpaint_crop(inputs, processor, device, max_width, max_height, multi
         bbox = None
         if rows.numel():
             bbox = (int(columns[0]), int(rows[0]), int(columns[-1]) + 1, int(rows[-1]) + 1)
-        x, y, width, height = bounded_crop_box(
-            image_width, image_height, bbox, max_width, max_height, multiple_of,
-        )
-        cropped_image = image[index:index + 1, y:y + height, x:x + width].cpu().clone()
-        cropped_mask = mask[:, y:y + height, x:x + width].cpu().clone()
+        processed_masks.append(mask)
+        stitch_masks.append(stitch_mask)
+        bboxes.append(bbox)
+
+    boxes, output_width, output_height = bounded_crop_layout(
+        image_width, image_height, bboxes, max_width, max_height, multiple_of,
+    )
+    crops, masks, blend_masks = [], [], []
+    for index, (x, y, width, height) in enumerate(boxes):
+        cropped_image = image[index:index + 1, y:y + height, x:x + width].to(device)
+        cropped_mask = processed_masks[index][:, y:y + height, x:x + width]
+        stitch_mask = stitch_masks[index]
+        if stitch_mask is not None:
+            stitch_mask = stitch_mask[:, y:y + height, x:x + width]
+        if (width, height) != (output_width, output_height):
+            cropped_image = processor.rescale_i(
+                cropped_image, output_width, output_height, inputs["downscale_algorithm"],
+            )
+            cropped_mask = processor.rescale_m(
+                cropped_mask, output_width, output_height, inputs["downscale_algorithm"],
+            )
+            if stitch_mask is not None:
+                stitch_mask = processor.rescale_m(
+                    stitch_mask, output_width, output_height, inputs["downscale_algorithm"],
+                )
         if stitch_mask is None:
             blend_mask = full_crop_feather_mask(
-                1, height, width, stitch_blend_pixels, device, torch.float32,
+                1, output_height, output_width, stitch_blend_pixels, device, torch.float32,
             )
         else:
-            blend_mask = feather_mask(
-                stitch_mask[:, y:y + height, x:x + width], stitch_blend_pixels, processor,
-            )
+            blend_mask = feather_mask(stitch_mask, stitch_blend_pixels, processor)
         blend_mask = blend_mask.cpu()
         geometry = {
             "canvas_to_orig_x": 0, "canvas_to_orig_y": 0,
@@ -102,7 +120,7 @@ def bounded_inpaint_crop(inputs, processor, device, max_width, max_height, multi
         }
         for name, value in geometry.items():
             stitcher[name].append(value)
-        crops.append(cropped_image)
-        masks.append(cropped_mask)
+        crops.append(cropped_image.cpu().clone())
+        masks.append(cropped_mask.cpu().clone())
         blend_masks.append(blend_mask)
     return stitcher, torch.cat(crops), torch.cat(masks), torch.cat(blend_masks)
