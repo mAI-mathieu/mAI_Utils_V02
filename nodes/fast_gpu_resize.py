@@ -42,7 +42,8 @@ class MAIFastGPUResize:
         "Keep aspect fits within width/height without padding or cropping. "
         "Fit pads black; fill crops from the center. "
         "Pad to multiple keeps the original image size and only adds black padding. "
-        "Center crop takes the exact width/height from the original without resizing."
+        "Center crop takes the exact width/height from the original without resizing. "
+        "Pad to multiple edge extends the border pixels instead of padding black."
     )
 
     @classmethod
@@ -52,11 +53,11 @@ class MAIFastGPUResize:
             "width": ("INT", {"default": 1280, "min": 1, "max": 16384}),
             "height": ("INT", {"default": 720, "min": 1, "max": 16384}),
             "resize_mode": (list(RESIZE_MODES), {"default": "exact",
-                                               "tooltip": "keep_aspect fits within width/height without padding or cropping. pad_to_multiple ignores width/height and preserves original image size, adding centered black padding to the next multiple_of. center_crop crops the original to exact width/height without resizing; dimensions must not exceed the source."}),
+                                               "tooltip": "keep_aspect fits within width/height without padding or cropping. pad_to_multiple and pad_to_multiple_edge ignore width/height and preserve original image size, padding to the next multiple_of with black or stretched edge pixels. center_crop crops the original to exact width/height without resizing; dimensions must not exceed the source."}),
             "method": (list(RESIZE_METHODS), {"default": "auto"}),
             "antialias": ("BOOLEAN", {"default": True}),
             "multiple_of": ("INT", {"default": 1, "min": 1, "max": 16384, "step": 1,
-                                    "tooltip": "Round output width and height to the nearest multiple; ties round upward. pad_to_multiple only pads original dimensions upward, leaving aligned dimensions unchanged. 1 disables rounding/padding. Ignored in center_crop mode so width/height stay exact."}),
+                                    "tooltip": "Round output width and height to the nearest multiple; ties round upward. pad_to_multiple and pad_to_multiple_edge only pad original dimensions upward, leaving aligned dimensions unchanged. 1 disables rounding/padding. Ignored in center_crop mode so width/height stay exact."}),
             "device": (["auto", "gpu", "cpu"], {"default": "auto"}),
             "precision": (["auto", "fp32", "fp16", "bf16"], {"default": "auto"}),
             "chunk_size": ("INT", {"default": 0, "min": 0, "max": 1000000,

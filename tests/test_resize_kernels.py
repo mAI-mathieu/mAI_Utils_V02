@@ -148,6 +148,7 @@ def test_round_up_to_multiple_rejects_invalid_values(dimension, multiple):
         round_up_to_multiple(dimension, multiple)
 
 
+@pytest.mark.parametrize("mode", ["pad_to_multiple", "pad_to_multiple_edge"])
 @pytest.mark.parametrize("source,multiple,expected", [
     ((1019, 769), 8, (1024, 776)),
     ((16, 9), 8, (16, 16)),
@@ -156,8 +157,8 @@ def test_round_up_to_multiple_rejects_invalid_values(dimension, multiple):
     ((7, 5), 3, (9, 6)),
     ((19, 9), 1, (19, 9)),
 ])
-def test_pad_to_multiple_geometry_uses_original_dimensions(source, multiple, expected):
-    geometry = calculate_target_size(*source, 4, 64, "pad_to_multiple", multiple)
+def test_pad_to_multiple_geometry_uses_original_dimensions(mode, source, multiple, expected):
+    geometry = calculate_target_size(*source, 4, 64, mode, multiple)
     assert (geometry.width, geometry.height) == expected
     assert (geometry.resize_width, geometry.resize_height) == source
 
@@ -183,11 +184,52 @@ def test_pad_to_multiple_copies_pixels_exactly_without_filtering(method, chunk_s
     assert torch.equal(image, before)
 
 
+@pytest.mark.parametrize("mode", ["pad_to_multiple", "pad_to_multiple_edge"])
 @pytest.mark.parametrize("multiple", [1, 8])
-def test_pad_to_multiple_aligned_image_reuses_original(multiple):
+def test_pad_to_multiple_aligned_image_reuses_original(mode, multiple):
     image = torch.randn(2, 16, 24, 3)
-    result, w, h, used = resize_image_batch(image, 1, 1, "pad_to_multiple", multiple_of=multiple)
+    result, w, h, used = resize_image_batch(image, 1, 1, mode, multiple_of=multiple)
     assert result is image and (w, h, used) == (24, 16, "identity")
+
+
+@pytest.mark.parametrize("method", RESIZE_METHODS)
+@pytest.mark.parametrize("chunk_size", [0, 2])
+def test_edge_padding_extends_all_borders_and_corners_without_resampling(method, chunk_size, monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Edge padding must not invoke resize kernels")
+
+    monkeypatch.setattr("utils.resize_kernels.resize_native", forbidden)
+    monkeypatch.setattr("utils.resize_kernels.build_sampling_weights", forbidden)
+    image = torch.randn(3, 6, 10, 4)[:, ::2, ::2]
+    before = image.clone()
+    result, w, h, used = resize_image_batch(
+        image, 1, 64, "pad_to_multiple_edge", method, multiple_of=8, chunk_size=chunk_size,
+    )
+    # 5x3 centered in 8x8: left=1, right=2, top=2, bottom=3.
+    assert result.shape == (3, 8, 8, 4) and (w, h, used) == (8, 8, "identity")
+    assert torch.equal(result[:, 2:5, 1:6], image)
+    assert torch.equal(result[:, :2, 1:6], image[:, :1].expand(-1, 2, -1, -1))
+    assert torch.equal(result[:, 5:, 1:6], image[:, -1:].expand(-1, 3, -1, -1))
+    assert torch.equal(result[:, 2:5, :1], image[:, :, :1])
+    assert torch.equal(result[:, 2:5, 6:], image[:, :, -1:].expand(-1, -1, 2, -1))
+    for rows, columns, corner in (
+        (slice(0, 2), slice(0, 1), image[:, :1, :1]),
+        (slice(0, 2), slice(6, 8), image[:, :1, -1:]),
+        (slice(5, 8), slice(0, 1), image[:, -1:, :1]),
+        (slice(5, 8), slice(6, 8), image[:, -1:, -1:]),
+    ):
+        region = result[:, rows, columns]
+        assert torch.equal(region, corner.expand_as(region))
+    assert torch.equal(image, before)
+
+
+@pytest.mark.parametrize("source", [(1, 1), (1, 5), (5, 1)])
+def test_edge_padding_handles_single_pixel_axes_and_large_padding(source):
+    width, height = source
+    image = torch.full((2, height, width, 3), 0.75)
+    result, w, h, _ = resize_image_batch(image, 1, 1, "pad_to_multiple_edge", multiple_of=64)
+    assert result.shape == (2, 64, 64, 3) and (w, h) == (64, 64)
+    assert result.eq(0.75).all()
 
 
 @pytest.mark.parametrize("target", [(19, 9), (12, 6), (13, 5), (19, 4), (10, 9), (1, 1)])
@@ -313,6 +355,24 @@ def test_kernel_definitions_and_support():
 
 
 DEVICES = ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])
+
+
+@pytest.mark.parametrize("device", DEVICES)
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16, torch.float64])
+def test_edge_padding_preserves_dtype_device_and_honors_precision(device, dtype):
+    image = torch.randn(2, 3, 7, 4, device=device, dtype=dtype)
+    result = resize_image_batch(image, 1, 1, "pad_to_multiple_edge", multiple_of=4)[0]
+    assert result.dtype == dtype and result.device == image.device
+    assert torch.equal(result[:, :3, :7], image)
+    assert torch.equal(result[:, 3:, :7], image[:, -1:])
+    assert torch.equal(result[:, :3, 7:], image[:, :, -1:])
+    assert torch.equal(result[:, 3:, 7:], image[:, -1:, -1:])
+    converted = resize_image_batch(
+        image, 1, 1, "pad_to_multiple_edge", multiple_of=4,
+        compute_device="cpu", precision="fp32", chunk_size=1,
+    )[0]
+    assert converted.dtype == torch.float32 and converted.device.type == "cpu"
+    assert torch.equal(converted, result.cpu().float())
 
 
 @pytest.mark.parametrize("device", DEVICES)

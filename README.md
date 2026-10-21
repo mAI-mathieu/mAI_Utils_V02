@@ -318,6 +318,15 @@ clamping occurs, regardless of `method` or `antialias`; `method_used` reports
 values are copied exactly. Explicit precision changes still convert pixel dtype.
 Padding fills all channels with zero (transparent black for RGBA).
 
+Use `resize_mode=pad_to_multiple_edge` for the same canvas dimensions and
+unchanged original image, filling padding by stretching the nearest border
+pixels outward. Top/bottom repeat the outermost rows, left/right repeat the
+outermost columns, and corners repeat the corner pixels. All channels,
+including alpha, are extended. Width/height are ignored; `multiple_of` controls
+the canvas. Aligned dimensions stay unchanged. No filtering or clamping occurs,
+and `method_used` reports `identity`. Keep `precision=auto` for exact original
+pixel values. This repeats the outermost pixels; it does not generate new detail.
+
 Use `resize_mode=center_crop` to take a centered crop at exactly the requested
 `width` and `height`, preserving the original pixel scale. It ignores
 `multiple_of`, `method` and `antialias`; no resizing, padding or clamping occurs.
@@ -375,6 +384,8 @@ reload the workflow. Try `keep_aspect` on a 16:9 image with width/height 1024,
 `multiple_of=1`: verify a 1024×576 output with no borders or cropping.
 Try `pad_to_multiple` with `multiple_of=64` on a 1019×769 image: verify a
 1024×832 canvas with the original image unchanged at the center.
+Switch to `pad_to_multiple_edge`: verify the same canvas dimensions with the
+border colors stretched through the padding and the original image unchanged.
 Try `center_crop` on a 1920×1080 image with width 1280 and height 720: verify
 a centered 1280×720 output with no scaling, even with `multiple_of=64`.
 Automated tests:

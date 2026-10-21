@@ -29,7 +29,7 @@ def test_node_contract_and_defaults():
     assert node.RETURN_NAMES == ("image", "width", "height", "method_used")
     assert inputs["multiple_of"][0] == "INT"
     assert inputs["multiple_of"][1]["min"] == 1
-    assert inputs["resize_mode"][0] == ["exact", "keep_aspect_fit", "keep_aspect_fill", "keep_aspect", "pad_to_multiple", "center_crop"]
+    assert inputs["resize_mode"][0] == ["exact", "keep_aspect_fit", "keep_aspect_fill", "keep_aspect", "pad_to_multiple", "center_crop", "pad_to_multiple_edge"]
     assert inputs["resize_mode"][1]["default"] == "exact"
     defaults = {name:spec[1]["default"] for name,spec in inputs.items() if name != "image"}
     image = torch.ones(1,720,1280,3)
@@ -69,6 +69,19 @@ def test_node_center_crop_returns_exact_requested_dimensions():
     assert result.shape == (2, 6, 12, 3)
     assert (w, h, used) == (12, 6, "identity")
     assert torch.equal(result, image[:, 1:7, 3:15])
+
+
+def test_node_edge_padding_preserves_image_and_extends_border():
+    image = torch.tensor([1., 2., 3., 4., 5., 6.]).reshape(1, 2, 3, 1)
+    result, w, h, used = MAIFastGPUResize().run(
+        image, 1, 64, resize_mode="pad_to_multiple_edge", multiple_of=4,
+    )
+    expected = torch.tensor([
+        [1., 2., 3., 3.], [1., 2., 3., 3.],
+        [4., 5., 6., 6.], [4., 5., 6., 6.],
+    ]).reshape(1, 4, 4, 1)
+    assert torch.equal(result, expected)
+    assert (w, h, used) == (4, 4, "identity")
 
 
 @pytest.mark.parametrize("precision,dtype", [("fp32",torch.float32),("fp16",torch.float16),("bf16",torch.bfloat16)])

@@ -14,6 +14,12 @@ pixels (unless an explicit dtype conversion is requested). Already aligned
 dimensions are unchanged. Existing modes retain nearest-multiple rounding.
 The mode is appended to the existing dropdown; defaults and sockets are unchanged.
 
+`pad_to_multiple_edge` shares the same source-based geometry and bypasses
+filtering, but uses torch replicate padding to extend the outermost rows,
+columns and corner pixels. This preserves all original values and channels,
+including alpha, with `precision=auto`. It also supports one-pixel source axes
+and padding larger than the source. Existing black padding modes are unchanged.
+
 `center_crop` keeps the resize dimensions equal to the source and uses the
 existing centered slicing path to produce the exact requested width and height.
 It ignores multiple rounding and bypasses sampling/clamping. Requests larger
