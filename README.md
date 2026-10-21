@@ -885,6 +885,36 @@ Inputs:
 * `stitch_mask_mode` (`rectangle (full crop)` or `extended mask`)
 * `stitch_mask_expand_pixels` (used by `extended mask`, default `32`)
 * `stitch_mask_blend_pixels` (default `32`; supports ComfyUI's full resolution range)
+* `use_mask_max_size` (BOOLEAN, default `false`): enable a native-resolution crop
+  around the mask with maximum dimensions. Existing workflows keep upstream
+  cropping until this is enabled.
+* `max_crop_width`, `max_crop_height` (INT, default `1024` each)
+* `crop_multiple_of` (INT, default `64`, minimum `1`)
+
+With `use_mask_max_size` enabled, each dimension is the largest multiple of
+`crop_multiple_of` that fits both the corresponding maximum and source image
+dimension. For example, a 110×85 source with maxima 200×200 and multiple 12
+produces a 108×84 crop. The crop centers on the processed mask and optional
+context mask, shifting inward at image edges. It never pads, resizes or extends
+outside the source. This mode overrides pre-resize, outpainting, context growth,
+output target resizing and output padding, while retaining their saved settings.
+Render-mask processing and both stitch-mask modes still apply; an expanded stitch
+mask also participates in crop placement.
+
+If the complete mask/context cannot fit the aligned maximum, the node raises a
+clear error: increase the maxima, reduce the multiple, or reduce mask expansion.
+If a source dimension or maximum is smaller than one multiple, reduce the
+multiple. Missing/empty masks select a centered crop with an empty render mask;
+an optional context mask can still position that crop. Batch items share output
+dimensions and have independent crop positions.
+
+The frontend hides pre-resize settings when `preresize` is off, outpainting
+factors when `extend_for_outpainting` is off, and target dimensions when
+`output_resize_to_target_size` is off. The pre-resize mode also selects the
+relevant min/max fields. Bounded mode shows its three size controls and hides
+the overridden settings. Stitch expansion appears only for `extended mask`.
+Hidden values are retained, and sockets remain available. Backend behavior
+works independently of this optional frontend extension.
 
 Outputs:
 
@@ -926,6 +956,19 @@ Known limitations:
 * This integration follows the locally installed upstream v3 stitcher format and
   requires the `cropped_mask_for_blend` field exposed by that format.
 * The optional dependency must be available when ComfyUI loads this node pack.
+* The native crop preserves source pixels exactly. Upstream Inpaint Stitch still
+  uses its existing PIL resampling path, which can quantize blended pixels to
+  8-bit values even when output resolution is unchanged.
+
+Test in ComfyUI: restart and refresh the browser, add **mAI Inpaint Crop - Separate
+Stitch Mask** under `mAI / Image`, enable `use_mask_max_size`, and set maxima and
+`crop_multiple_of`. Try a mask near each edge and a source smaller than the
+maxima. Preview both cropped masks, then connect the unchanged `cropped_image`
+and `stitcher` to upstream **Inpaint Stitch** to verify placement. Toggle
+pre-resize, outpainting, output resizing and stitch mode to verify visibility.
+Registration remains `MAIInpaintCropSeparateStitchMask`; output order is unchanged.
+Automated checks:
+`python -m pytest tests/test_bounded_crop_geometry.py tests/test_separate_stitch_mask.py`.
 
 ### CropAndStitch dependency installation
 

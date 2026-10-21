@@ -6,6 +6,7 @@ from copy import deepcopy
 
 import torch
 
+from ..utils.bounded_inpaint_crop import bounded_inpaint_crop
 from ..utils.cropandstitch_dependency import load_cropandstitch_module
 from ..utils.separate_stitch_mask import (
     broadcast_inputs,
@@ -70,6 +71,21 @@ class MAIInpaintCropSeparateStitchMask(_UPSTREAM.InpaintCropImproved):
                 "tooltip": "Feathering applied only to the separate stitch mask.",
             },
         )
+        # Append widgets so saved workflows retain the old positional values.
+        input_types["required"]["use_mask_max_size"] = (
+            "BOOLEAN",
+            {"default": False, "tooltip": (
+                "Extend around the mask at native resolution within the source image. "
+                "Overrides pre-resize, outpainting, context growth, output resizing and padding."
+            )},
+        )
+        for name, default in (("max_crop_width", 1024), ("max_crop_height", 1024),
+                              ("crop_multiple_of", 64)):
+            input_types["required"][name] = (
+                "INT", {"default": default, "min": 1,
+                        "max": _UPSTREAM.nodes.MAX_RESOLUTION, "step": 1,
+                        "tooltip": "Used only when use_mask_max_size is enabled."},
+            )
         return input_types
 
     def inpaint_crop(
@@ -77,10 +93,23 @@ class MAIInpaintCropSeparateStitchMask(_UPSTREAM.InpaintCropImproved):
         stitch_mask_mode="rectangle (full crop)",
         stitch_mask_expand_pixels=32,
         stitch_mask_blend_pixels=32,
+        use_mask_max_size=False,
+        max_crop_width=1024,
+        max_crop_height=1024,
+        crop_multiple_of=64,
         **upstream_inputs,
     ):
         if stitch_mask_mode not in ("rectangle (full crop)", "extended mask"):
             raise ValueError(f"Unknown stitch mask mode: {stitch_mask_mode}")
+
+        if use_mask_max_size:
+            return bounded_inpaint_crop(
+                upstream_inputs,
+                self._processor_for(upstream_inputs["device_mode"]),
+                self._processing_device(upstream_inputs["device_mode"]),
+                max_crop_width, max_crop_height, crop_multiple_of,
+                stitch_mask_mode, int(stitch_mask_expand_pixels), int(stitch_mask_blend_pixels),
+            )
 
         if stitch_mask_mode == "rectangle (full crop)":
             upstream_result = super().inpaint_crop(**upstream_inputs)
