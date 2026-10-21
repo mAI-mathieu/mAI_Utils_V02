@@ -25,23 +25,25 @@ def test_node_contract_and_defaults():
     node = MAIFastGPUResize()
     inputs = node.INPUT_TYPES()["required"]
     assert node.CATEGORY == "mAI / Image"
-    assert node.RETURN_TYPES == ("IMAGE", "INT", "INT", "STRING")
-    assert node.RETURN_NAMES == ("image", "width", "height", "method_used")
+    assert node.RETURN_TYPES == ("IMAGE", "INT", "INT", "STRING", "MASK")
+    assert node.RETURN_NAMES == ("image", "width", "height", "method_used", "mask")
+    assert node.INPUT_TYPES()["optional"]["mask"][0] == "MASK"
     assert inputs["multiple_of"][0] == "INT"
     assert inputs["multiple_of"][1]["min"] == 1
     assert inputs["resize_mode"][0] == ["exact", "keep_aspect_fit", "keep_aspect_fill", "keep_aspect", "pad_to_multiple", "center_crop", "pad_to_multiple_edge"]
     assert inputs["resize_mode"][1]["default"] == "exact"
     defaults = {name:spec[1]["default"] for name,spec in inputs.items() if name != "image"}
     image = torch.ones(1,720,1280,3)
-    result,w,h,used = node.run(image, **defaults)
+    result,w,h,used,mask = node.run(image, **defaults)
     assert result is image and (w,h,used) == (1280,720,"identity")
+    assert mask.shape == (1,720,1280) and not mask.any()
     # A number outside the former presets also works as a connected INT value.
-    result,w,h,_ = node.run(torch.ones(1,4,8,3),25,26,method="nearest",multiple_of=3)
+    result,w,h,_,_ = node.run(torch.ones(1,4,8,3),25,26,method="nearest",multiple_of=3)
     assert result.shape == (1,27,24,3) and (w,h) == (24,27)
 
 
 def test_node_keep_aspect_returns_actual_dimensions_without_padding():
-    result, w, h, used = MAIFastGPUResize().run(
+    result, w, h, used, _ = MAIFastGPUResize().run(
         torch.ones(2, 9, 16, 3), 32, 32, resize_mode="keep_aspect", method="nearest",
     )
     assert result.shape == (2, 18, 32, 3)
@@ -51,7 +53,7 @@ def test_node_keep_aspect_returns_actual_dimensions_without_padding():
 
 def test_node_pad_to_multiple_preserves_original_dimensions_and_pixels():
     image = torch.randn(2, 9, 19, 3)
-    result, w, h, used = MAIFastGPUResize().run(
+    result, w, h, used, _ = MAIFastGPUResize().run(
         image, 4, 64, resize_mode="pad_to_multiple", multiple_of=8,
     )
     assert result.shape == (2, 16, 24, 3)
@@ -63,7 +65,7 @@ def test_node_pad_to_multiple_preserves_original_dimensions_and_pixels():
 
 def test_node_center_crop_returns_exact_requested_dimensions():
     image = torch.randn(2, 9, 19, 3)
-    result, w, h, used = MAIFastGPUResize().run(
+    result, w, h, used, _ = MAIFastGPUResize().run(
         image, 12, 6, resize_mode="center_crop", multiple_of=8,
     )
     assert result.shape == (2, 6, 12, 3)
@@ -73,7 +75,7 @@ def test_node_center_crop_returns_exact_requested_dimensions():
 
 def test_node_edge_padding_preserves_image_and_extends_border():
     image = torch.tensor([1., 2., 3., 4., 5., 6.]).reshape(1, 2, 3, 1)
-    result, w, h, used = MAIFastGPUResize().run(
+    result, w, h, used, _ = MAIFastGPUResize().run(
         image, 1, 64, resize_mode="pad_to_multiple_edge", multiple_of=4,
     )
     expected = torch.tensor([
@@ -86,8 +88,9 @@ def test_node_edge_padding_preserves_image_and_extends_border():
 
 @pytest.mark.parametrize("precision,dtype", [("fp32",torch.float32),("fp16",torch.float16),("bf16",torch.bfloat16)])
 def test_explicit_precision_and_cpu_are_respected_on_identity(precision,dtype):
-    result,w,h,used = MAIFastGPUResize().run(torch.ones(1,3,4,3),4,3,device="cpu",precision=precision)
+    result,w,h,used,mask = MAIFastGPUResize().run(torch.ones(1,3,4,3),4,3,device="cpu",precision=precision)
     assert result.dtype == dtype and result.device.type == "cpu"
+    assert mask.dtype == dtype and mask.device == result.device
     assert (w,h,used) == (4,3,"identity")
 
 

@@ -4,8 +4,10 @@ import torch
 
 try:
     from ..utils.resize_kernels import RESIZE_METHODS, RESIZE_MODES, resize_image_batch
+    from ..utils.resize_masks import prepare_resize_mask, resize_mask_batch
 except ImportError:
     from utils.resize_kernels import RESIZE_METHODS, RESIZE_MODES, resize_image_batch
+    from utils.resize_masks import prepare_resize_mask, resize_mask_batch
 
 
 def resolve_compute_device(image_device, device):
@@ -34,8 +36,8 @@ def resolve_compute_device(image_device, device):
 class MAIFastGPUResize:
     CATEGORY = "mAI / Image"
     FUNCTION = "run"
-    RETURN_TYPES = ("IMAGE", "INT", "INT", "STRING")
-    RETURN_NAMES = ("image", "width", "height", "method_used")
+    RETURN_TYPES = ("IMAGE", "INT", "INT", "STRING", "MASK")
+    RETURN_NAMES = ("image", "width", "height", "method_used", "mask")
     DESCRIPTION = (
         "Batched torch resize with native, Lanczos and BC cubic kernels. "
         "Auto device keeps the input device; select gpu to move CPU images to CUDA. "
@@ -43,7 +45,8 @@ class MAIFastGPUResize:
         "Fit pads black; fill crops from the center. "
         "Pad to multiple keeps the original image size and only adds black padding. "
         "Center crop takes the exact width/height from the original without resizing. "
-        "Pad to multiple edge extends the border pixels instead of padding black."
+        "Pad to multiple edge extends the border pixels instead of padding black. "
+        "An optional source-size mask follows the same transform; absent masks output zeros."
     )
 
     @classmethod
@@ -62,13 +65,21 @@ class MAIFastGPUResize:
             "precision": (["auto", "fp32", "fp16", "bf16"], {"default": "auto"}),
             "chunk_size": ("INT", {"default": 0, "min": 0, "max": 1000000,
                                    "tooltip": "0: whole batch for native modes, automatic memory-bounded chunks for custom kernels. Positive: frames per chunk."}),
+        }, "optional": {
+            "mask": ("MASK", {"tooltip": "Source-size mask transformed with the image. One mask broadcasts across an image batch. If omitted, outputs a zero mask at the output size."}),
         }}
 
     def run(self, image, width=1280, height=720, resize_mode="exact", method="auto",
-            antialias=True, multiple_of=1, device="auto", precision="auto", chunk_size=0):
+            antialias=True, multiple_of=1, device="auto", precision="auto", chunk_size=0, mask=None):
         if not isinstance(image, torch.Tensor):
             raise ValueError("image must be a ComfyUI IMAGE tensor.")
-        return resize_image_batch(
+        mask = prepare_resize_mask(mask, image.shape)
+        result = resize_image_batch(
             image, width, height, resize_mode, method, antialias, multiple_of,
             resolve_compute_device(image.device, device), precision, chunk_size,
         )
+        output_mask = resize_mask_batch(
+            mask, result[0], width, height, resize_mode, method, antialias,
+            multiple_of, precision, chunk_size,
+        )
+        return (*result, output_mask)

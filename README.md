@@ -288,9 +288,22 @@ Location: `mAI / Image`. Registered as `MAIFastGPUResize`.
 
 Resizes a complete ComfyUI `IMAGE` batch using PyTorch tensors. Supports RGB,
 RGBA and other channel counts. Inputs: `image`, `width`, `height`, `resize_mode`,
-`method`, `antialias`, `multiple_of`, `device`, `precision`, and `chunk_size`.
+`method`, `antialias`, `multiple_of`, `device`, `precision`, `chunk_size`, and
+optional `mask` (MASK).
 Outputs in order: `image` (IMAGE), `width` (INT), `height` (INT),
-`method_used` (STRING, including `identity` for a resize bypass).
+`method_used` (STRING, including `identity` for a resize bypass), `mask` (MASK).
+The mask output is appended; the original four outputs keep their positions.
+
+An optional mask follows the image's exact resize/crop/padding geometry, method,
+antialias setting, multiple rounding and explicit precision. Fit/black padding
+uses zero mask values; edge padding repeats mask border values. Masks must have
+the source image's width/height and shape `[B,H,W]` or `[H,W]`. A single mask
+broadcasts over all image frames; otherwise batch sizes must match. Mismatched
+dimensions or batches raise clear errors. Output masks are `[B,H,W]` on the
+image output device. With `precision=auto`, each input keeps its own dtype.
+If no mask is connected, the output is an all-zero mask matching the output
+image batch and dimensions. Resampling can produce soft mask edges; use
+`method=nearest` or `nearest-exact` to retain hard labels.
 
 Defaults: 1280×720, `exact`, `auto` method/device/precision, antialias enabled,
 multiple 1, chunk size 0. Modes: `exact` stretches; `keep_aspect_fit` centers the
@@ -388,8 +401,11 @@ Switch to `pad_to_multiple_edge`: verify the same canvas dimensions with the
 border colors stretched through the padding and the original image unchanged.
 Try `center_crop` on a 1920×1080 image with width 1280 and height 720: verify
 a centered 1280×720 output with no scaling, even with `multiple_of=64`.
+Connect a source-size mask to `mask`, then view the final mask output with
+Mask to Image and Preview Image. Verify its alignment with the image in resize,
+crop and both padding modes. Disconnect the input to verify an all-zero output.
 Automated tests:
-`python -m pytest tests/test_resize_kernels.py tests/test_fast_gpu_resize.py tests/test_gpu_memory.py`.
+`python -m pytest tests/test_resize_kernels.py tests/test_resize_masks.py tests/test_fast_gpu_resize.py tests/test_gpu_memory.py`.
 Benchmark: `python scripts/benchmark_fast_gpu_resize.py --direct` (CUDA), or
 `--device cpu --smoke`. Measurements and architecture details:
 [Fast GPU Resize notes](docs/fast_gpu_resize.md).

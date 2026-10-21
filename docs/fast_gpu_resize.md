@@ -6,6 +6,15 @@ device helper at execution time. `utils/resize_kernels.py` contains geometry,
 method selection, dtype handling, sampling and batching with no ComfyUI dependency.
 Registration adds only `MAIFastGPUResize` to the existing root mappings.
 
+`utils/resize_masks.py` validates optional source-size floating-point masks and
+broadcasts single masks to the image batch using a view. Prepared masks pass
+through the same tensor resizing implementation as one-channel BHWC images,
+with identical geometry and sampling settings. Masks move to the output image
+device, use the requested precision, and return as BHW. Padding follows the image
+mode, including replicated borders. Missing masks produce output-size zeros.
+The node appends a MASK output after the original four outputs, preserving their
+names, types and positions; the optional input adds no serialized widget.
+
 `pad_to_multiple` derives the canvas from the source dimensions, rounding each
 up to the smallest multiple at least as large as the source. Requested width
 and height are ignored. Resize dimensions stay equal to the source, so the
