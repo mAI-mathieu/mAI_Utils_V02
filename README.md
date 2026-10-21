@@ -875,9 +875,11 @@ The generated stitch mask has two modes:
 
 Only `cropped_mask` is sent to the inpainting model.
 `stitch_mask_blend_pixels` feathers the generated stitch boundary in either
-mode. Feathering happens inward so the outer crop boundary reaches exact black
-(`0.0`) on only its final perimeter row while preserving a fully white center
-whenever the crop size allows it.
+mode. Internal crop boundaries fade inward to exact black (`0.0`). Original
+picture borders never fade: white mask values remain white and soft values are
+retained, including corners, resized crops, and picture borders inside padded
+or outpainted crops. This does not force unmasked parts of the border to white.
+A crop covering the complete picture has no rectangular perimeter fade.
 
 Inputs:
 
@@ -976,6 +978,9 @@ Stitch Mask** under `mAI / Image`, enable `use_mask_max_size`, and set maxima an
 maxima, and a mask larger than the maxima. Preview both cropped masks, then connect the unchanged `cropped_image`
 and `stitcher` to upstream **Inpaint Stitch** to verify placement. Toggle
 pre-resize, outpainting, output resizing and stitch mode to verify visibility.
+With nonzero stitch blending, place the mask at each picture edge: the edit must
+reach the border fully while internal crop edges still blend. Test a full-image
+mask as well; its stitch mask should remain fully white after downscaling.
 Registration remains `MAIInpaintCropSeparateStitchMask`; output order is unchanged.
 Automated checks:
 `python -m pytest tests/test_bounded_crop_geometry.py tests/test_separate_stitch_mask.py`.

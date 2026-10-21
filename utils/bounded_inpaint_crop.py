@@ -5,6 +5,7 @@ import torch
 from .bounded_crop_geometry import bounded_crop_layout
 from .separate_stitch_mask import (
     broadcast_inputs, feather_mask, full_crop_feather_mask, normalize_mask,
+    image_bounds_in_crop, blur_mask_at_picture_edges,
 )
 
 
@@ -59,7 +60,9 @@ def bounded_inpaint_crop(inputs, processor, device, max_width, max_height, multi
             mask = processor.invert_m(mask)
         if inputs["mask_blend_pixels"] > 0:
             mask = processor.expand_m(mask, inputs["mask_blend_pixels"])
-            mask = processor.blur_m(mask, inputs["mask_blend_pixels"] * 0.5)
+            mask = blur_mask_at_picture_edges(
+                mask, inputs["mask_blend_pixels"] * 0.5, processor,
+            )
         if inputs["mask_hipass_filter"] >= 0.01:
             mask = processor.hipassfilter_m(mask, inputs["mask_hipass_filter"])
             context = processor.hipassfilter_m(context, inputs["mask_hipass_filter"])
@@ -103,21 +106,23 @@ def bounded_inpaint_crop(inputs, processor, device, max_width, max_height, multi
                 stitch_mask = processor.rescale_m(
                     stitch_mask, output_width, output_height, inputs["downscale_algorithm"],
                 )
-        if stitch_mask is None:
-            blend_mask = full_crop_feather_mask(
-                1, output_height, output_width, stitch_blend_pixels, device, torch.float32,
-            )
-        else:
-            blend_mask = feather_mask(stitch_mask, stitch_blend_pixels, processor)
-        blend_mask = blend_mask.cpu()
         geometry = {
             "canvas_to_orig_x": 0, "canvas_to_orig_y": 0,
             "canvas_to_orig_w": image_width, "canvas_to_orig_h": image_height,
             "canvas_image": image[index:index + 1].cpu().clone(),
             "cropped_to_canvas_x": x, "cropped_to_canvas_y": y,
             "cropped_to_canvas_w": width, "cropped_to_canvas_h": height,
-            "cropped_mask_for_blend": blend_mask,
         }
+        image_bounds = image_bounds_in_crop(geometry, output_height, output_width)
+        if stitch_mask is None:
+            blend_mask = full_crop_feather_mask(
+                1, output_height, output_width, stitch_blend_pixels, device, torch.float32,
+                image_bounds,
+            )
+        else:
+            blend_mask = feather_mask(stitch_mask, stitch_blend_pixels, processor, image_bounds)
+        blend_mask = blend_mask.cpu()
+        geometry["cropped_mask_for_blend"] = blend_mask
         for name, value in geometry.items():
             stitcher[name].append(value)
         crops.append(cropped_image.cpu().clone())

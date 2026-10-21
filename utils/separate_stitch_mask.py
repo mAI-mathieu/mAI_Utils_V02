@@ -205,11 +205,84 @@ def crop_mask_with_stitcher_geometry(
         )
         cropped = processor.rescale_m(cropped, output_width, output_height, algorithm)
 
-    return feather_mask(cropped, blend_pixels, processor)
+    return feather_mask(
+        cropped, blend_pixels, processor,
+        image_bounds_in_crop(geometry, output_height, output_width),
+    )
 
 
-def feather_mask(mask: torch.Tensor, blend_pixels: int, processor: object) -> torch.Tensor:
-    """Feather a mask, including edges that touch the crop boundary."""
+def image_bounds_in_crop(geometry, output_height, output_width):
+    """Map the original picture's half-open bounds into the resized crop."""
+    left, top, right, bottom = geometry.get("source_image_bounds", (
+        geometry["canvas_to_orig_x"], geometry["canvas_to_orig_y"],
+        geometry["canvas_to_orig_x"] + geometry["canvas_to_orig_w"],
+        geometry["canvas_to_orig_y"] + geometry["canvas_to_orig_h"],
+    ))
+    x, y = geometry["cropped_to_canvas_x"], geometry["cropped_to_canvas_y"]
+    scale_x = output_width / geometry["cropped_to_canvas_w"]
+    scale_y = output_height / geometry["cropped_to_canvas_h"]
+    bounds = ((left - x) * scale_x, (top - y) * scale_y,
+              (right - x) * scale_x, (bottom - y) * scale_y)
+    return tuple(round(v) if math.isclose(v, round(v), abs_tol=1e-6) else v for v in bounds)
+
+
+def _crop_fade_edges(height, width, image_bounds):
+    if image_bounds is None:
+        return True, True, True, True
+    left, top, right, bottom = image_bounds
+    return (not math.isclose(top, 0, abs_tol=1e-6),
+            not math.isclose(bottom, height, abs_tol=1e-6),
+            not math.isclose(left, 0, abs_tol=1e-6),
+            not math.isclose(right, width, abs_tol=1e-6))
+
+
+def preserve_image_edges(mask, feathered, image_bounds, blend_pixels):
+    """Retain source mask values at picture borders, smoothly joining the feather.
+
+    Picture borders can lie inside padded/outpainted crops. Restore their values
+    too, without turning originally transparent parts of the border white.
+    """
+    if image_bounds is None or blend_pixels <= 0:
+        return feathered
+    height, width = mask.shape[1:]
+    left, top, right, bottom = image_bounds
+    xs = torch.arange(width, device=mask.device, dtype=mask.dtype).view(1, width)
+    ys = torch.arange(height, device=mask.device, dtype=mask.dtype).view(height, 1)
+    weight = torch.zeros((height, width), device=mask.device, dtype=mask.dtype)
+    for boundary, limit, positions, upper in (
+        (left, width, xs, False), (right, width, xs, True),
+        (top, height, ys, False), (bottom, height, ys, True),
+    ):
+        included = (0 < boundary <= limit) if upper else (0 <= boundary < limit)
+        if included:
+            pixel = math.ceil(boundary - 1e-6) - 1 if upper else math.floor(boundary + 1e-6)
+            ramp = (1 - (positions - pixel).abs() / blend_pixels).clamp(0, 1)
+            weight = torch.maximum(weight, ramp)
+    valid = (xs >= math.floor(left + 1e-6)) & (xs < math.ceil(right - 1e-6))
+    valid = valid & (ys >= math.floor(top + 1e-6)) & (ys < math.ceil(bottom - 1e-6))
+    weight = weight * valid
+    return (feathered * (1 - weight) + mask * weight).float().clamp(0, 1)
+
+
+def blur_mask_at_picture_edges(mask, pixels, processor):
+    """Blur with real border values instead of introducing black outside a picture."""
+    padding = max(1, math.ceil(pixels))
+    padded = torch.nn.functional.pad(
+        mask.unsqueeze(1), (padding, padding, padding, padding), mode="replicate",
+    ).squeeze(1)
+    blurred = processor.blur_m(padded, pixels)
+    blurred = blurred[:, padding:-padding, padding:-padding]
+    # A convolution can return 0.9999999 for solid white; PIL would truncate it
+    # to 254/255 during resize. Retain constant white areas exactly.
+    blurred = torch.where((mask == 1) & (blurred >= 1 - 1e-6), mask, blurred)
+    return preserve_image_edges(
+        mask, blurred, (0, 0, mask.shape[2], mask.shape[1]), pixels,
+    )
+
+
+def feather_mask(mask: torch.Tensor, blend_pixels: int, processor: object,
+                 image_bounds=None) -> torch.Tensor:
+    """Feather internal mask/crop boundaries while retaining picture-edge values."""
 
     if blend_pixels <= 0:
         return mask.float().clamp(0.0, 1.0)
@@ -221,32 +294,38 @@ def feather_mask(mask: torch.Tensor, blend_pixels: int, processor: object) -> to
         int(blend_pixels), max(1, min(mask.shape[1], mask.shape[2]) // 2)
     )
     padding = effective_blend
-    padded = torch.zeros(
-        (
-            mask.shape[0],
-            mask.shape[1] + padding * 2,
-            mask.shape[2] + padding * 2,
-        ),
-        device=mask.device,
-        dtype=mask.dtype,
+    fade_top, fade_bottom, fade_left, fade_right = _crop_fade_edges(
+        mask.shape[1], mask.shape[2], image_bounds,
     )
-    padded[:, padding:-padding, padding:-padding] = mask
+    padded = torch.nn.functional.pad(
+        mask.unsqueeze(1), (padding, padding, padding, padding), mode="replicate",
+    ).squeeze(1)
+    if fade_top:
+        padded[:, :padding, :] = 0
+    if fade_bottom:
+        padded[:, -padding:, :] = 0
+    if fade_left:
+        padded[:, :, :padding] = 0
+    if fade_right:
+        padded[:, :, -padding:] = 0
     padded = processor.blur_m(padded, effective_blend * 0.5)
     feathered = padded[
         :, padding : padding + mask.shape[1], padding : padding + mask.shape[2]
     ]
+    feathered = torch.where((mask == 1) & (feathered >= 1 - 1e-6), mask, feathered)
 
-    # Gaussian blur reaches 0 outside the crop, so cropping it directly leaves
-    # 0.5 on straight edges and about 0.25 at corners. Apply an inward smooth
-    # edge ramp so every outermost output pixel is exactly black.
-    return (feathered * full_crop_feather_mask(
+    # Internal crop edges fade to exact black; picture borders retain source
+    # mask values, including where they meet an internal crop edge.
+    feathered = feathered * full_crop_feather_mask(
         mask.shape[0],
         mask.shape[1],
         mask.shape[2],
         effective_blend,
         mask.device,
         mask.dtype,
-    )).float().clamp(0.0, 1.0)
+        image_bounds,
+    )
+    return preserve_image_edges(mask, feathered, image_bounds, effective_blend).float().clamp(0, 1)
 
 
 def full_crop_feather_mask(
@@ -256,25 +335,34 @@ def full_crop_feather_mask(
     blend_pixels: int,
     device: torch.device,
     dtype: torch.dtype,
+    image_bounds=None,
 ) -> torch.Tensor:
-    """Return a full-crop rectangle that fades inward from exact-zero edges."""
+    """Fade internal crop edges inward, exempting original picture borders."""
 
     if blend_pixels <= 0:
         return torch.ones((batch_size, height, width), device=device, dtype=dtype)
 
     positions_y = torch.arange(height, device=device, dtype=dtype)
     positions_x = torch.arange(width, device=device, dtype=dtype)
-    distance_y = torch.minimum(positions_y, (height - 1) - positions_y).view(
-        height, 1
-    )
-    distance_x = torch.minimum(positions_x, (width - 1) - positions_x).view(
-        1, width
-    )
+    fade_top, fade_bottom, fade_left, fade_right = _crop_fade_edges(height, width, image_bounds)
+    distance_y = torch.full_like(positions_y, float("inf"))
+    distance_x = torch.full_like(positions_x, float("inf"))
+    if fade_top:
+        distance_y = torch.minimum(distance_y, positions_y)
+    if fade_bottom:
+        distance_y = torch.minimum(distance_y, (height - 1) - positions_y)
+    if fade_left:
+        distance_x = torch.minimum(distance_x, positions_x)
+    if fade_right:
+        distance_x = torch.minimum(distance_x, (width - 1) - positions_x)
+    distance_y = distance_y.view(height, 1)
+    distance_x = distance_x.view(1, width)
     distance_to_edge = torch.minimum(distance_y, distance_x)
     maximum_distance = float(distance_to_edge.max().item())
     effective = min(float(blend_pixels), maximum_distance)
     if effective <= 0:
-        return torch.zeros((batch_size, height, width), device=device, dtype=dtype)
+        result = torch.zeros((batch_size, height, width), device=device, dtype=dtype)
+        return preserve_image_edges(torch.ones_like(result), result, image_bounds, blend_pixels)
 
     normalized = (distance_to_edge / effective).clamp(0.0, 1.0)
     ramp = torch.sin(normalized * (torch.pi / 2.0))
@@ -288,7 +376,8 @@ def full_crop_feather_mask(
         torch.zeros_like(ramp),
         torch.maximum(ramp, minimum_visible),
     )
-    return ramp.view(1, height, width).expand(batch_size, -1, -1)
+    result = ramp.view(1, height, width).expand(batch_size, -1, -1)
+    return preserve_image_edges(torch.ones_like(result), result, image_bounds, effective)
 
 
 def stack_stitcher_masks(stitcher: Mapping[str, object]) -> torch.Tensor:

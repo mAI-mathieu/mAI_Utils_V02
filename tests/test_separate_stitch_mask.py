@@ -15,6 +15,9 @@ from utils.separate_stitch_mask import (
     crop_mask_with_stitcher_geometry,
     extend_mask,
     full_crop_feather_mask,
+    feather_mask,
+    image_bounds_in_crop,
+    preserve_image_edges,
     preresize_dimensions,
     stack_stitcher_masks,
 )
@@ -449,6 +452,110 @@ def test_full_crop_feather_has_only_one_exact_black_perimeter():
     assert torch.all(mask[:, 1:-1, -2] > 0.0)
 
 
+@pytest.mark.parametrize("edge", ["left", "right", "top", "bottom"])
+def test_feather_preserves_mask_values_on_picture_edges_only(edge):
+    mask = torch.zeros(1, 32, 32)
+    mask[:, 4:28, 4:28] = 1
+    # Include a soft segment: protecting the border must not force it to white.
+    mask[:, 10:14] *= 0.4
+    bounds = {
+        "left": (0, -10, 50, 50), "right": (-10, -10, 32, 50),
+        "top": (-10, 0, 50, 50), "bottom": (-10, -10, 50, 32),
+    }[edge]
+    if edge == "left":
+        mask[:, :, :8] = mask[:, :, 4:5].clone()
+    elif edge == "right":
+        mask[:, :, -8:] = mask[:, :, -5:-4].clone()
+    elif edge == "top":
+        mask[:, :8, :] = mask[:, 4:5, :].clone()
+    else:
+        mask[:, -8:, :] = mask[:, -5:-4, :].clone()
+    result = feather_mask(mask, 8, _TestProcessor(), bounds)
+    selection = {"left": (slice(None), slice(None), 0),
+                 "right": (slice(None), slice(None), -1),
+                 "top": (slice(None), 0, slice(None)),
+                 "bottom": (slice(None), -1, slice(None))}[edge]
+    assert torch.equal(result[selection], mask[selection])
+    assert result[0, 0 if edge != "top" else -1, 16] == 0
+
+
+def test_picture_border_inside_padding_retains_values_and_empty_region():
+    mask = torch.zeros(1, 40, 48)
+    mask[:, 6:30, 8:40] = 1
+    mask[:, 15:20, 8] = 0.25
+    bounds = (8, 6, 40, 30)
+    result = preserve_image_edges(mask, torch.zeros_like(mask), bounds, 8)
+    assert torch.equal(result[:, 6, 8:40], mask[:, 6, 8:40])
+    assert torch.equal(result[:, 29, 8:40], mask[:, 29, 8:40])
+    assert torch.equal(result[:, 6:30, 8], mask[:, 6:30, 8])
+    assert torch.equal(result[:, 6:30, 39], mask[:, 6:30, 39])
+    assert result[:, :6].count_nonzero() == 0
+
+
+@pytest.mark.parametrize("bounded", [False, True])
+@pytest.mark.parametrize("stitch_mode", ["rectangle (full crop)", "extended mask"])
+@pytest.mark.parametrize("edge", ["left", "right", "top", "bottom"])
+def test_stitch_mask_does_not_fade_at_original_picture_edge(
+    cropandstitch_classes, bounded, stitch_mode, edge,
+):
+    node_class, upstream = cropandstitch_classes
+    image = torch.zeros(1, 128, 128, 3)
+    mask = torch.zeros(1, 128, 128)
+    if edge == "left":
+        mask[:, 48:80, :16] = 1
+    elif edge == "right":
+        mask[:, 48:80, -16:] = 1
+    elif edge == "top":
+        mask[:, :16, 48:80] = 1
+    else:
+        mask[:, -16:, 48:80] = 1
+    inputs = _crop_inputs(image, mask)
+    if not bounded:
+        inputs.update(output_resize_to_target_size=True, output_target_width=64, output_target_height=64)
+    stitcher, crop, _, blend = node_class().inpaint_crop(
+        use_mask_max_size=bounded, max_crop_width=64, max_crop_height=64, crop_multiple_of=16,
+        stitch_mask_mode=stitch_mode, stitch_mask_expand_pixels=0, stitch_mask_blend_pixels=8,
+        **inputs,
+    )
+    geometry = node_class._geometry_for(stitcher, 0, inputs)
+    bounds = image_bounds_in_crop(geometry, blend.shape[1], blend.shape[2])
+    left, top, right, bottom = bounds
+    if edge in ("left", "right"):
+        column = int(left) if edge == "left" else int(right) - 1
+        assert blend[0, blend.shape[1] // 2, column] == 1
+    else:
+        row = int(top) if edge == "top" else int(bottom) - 1
+        assert blend[0, row, blend.shape[2] // 2] == 1
+    assert torch.any((blend > 0) & (blend < 1))
+    assert torch.equal(blend[0], stitcher["cropped_mask_for_blend"][0][0])
+    edited, = upstream.InpaintStitchImproved().inpaint_stitch(stitcher, torch.ones_like(crop))
+    row, column = {"left": (64, 0), "right": (64, 127),
+                   "top": (0, 64), "bottom": (127, 64)}[edge]
+    assert (edited[0, row, column] == 1).all()
+
+
+@pytest.mark.parametrize("stitch_mode", ["rectangle (full crop)", "extended mask"])
+@pytest.mark.parametrize("device_mode", ["cpu (compatible)", "gpu (much faster)"])
+def test_full_picture_oversize_mask_has_no_frame_fade_after_resizing(
+    cropandstitch_classes, stitch_mode, device_mode,
+):
+    node_class, upstream = cropandstitch_classes
+    inputs = _crop_inputs(torch.zeros(1, 128, 128, 3), torch.ones(1, 128, 128))
+    inputs["device_mode"] = device_mode
+    inputs["mask_blend_pixels"] = 8
+    stitcher, crop, render, blend = node_class().inpaint_crop(
+        use_mask_max_size=True, max_crop_width=64, max_crop_height=64, crop_multiple_of=16,
+        stitch_mask_mode=stitch_mode, stitch_mask_expand_pixels=0, stitch_mask_blend_pixels=16,
+        **inputs,
+    )
+    assert crop.shape == (1, 64, 64, 3)
+    assert (blend == 1).all()
+    assert (render[:, 0] == 1).all() and (render[:, -1] == 1).all()
+    assert (render[:, :, 0] == 1).all() and (render[:, :, -1] == 1).all()
+    edited, = upstream.InpaintStitchImproved().inpaint_stitch(stitcher, torch.ones_like(crop))
+    assert (edited == 1).all()
+
+
 def test_missing_dependency_raises_a_nonfatal_classified_error(monkeypatch):
     monkeypatch.setattr(cropandstitch_dependency, "_already_loaded_module", lambda: None)
     monkeypatch.setattr(cropandstitch_dependency, "_dependency_candidates", lambda: [])
@@ -614,6 +721,32 @@ def test_edge_mask_outpainting_and_feathering(cropandstitch_classes):
     )
     assert stitched.shape[1:3] == (64, 96)
     assert torch.count_nonzero(stitched[:, :, :16]) == 0
+    # The original picture starts at x=32 inside the extended canvas.
+    assert (stitched[0, 0, 32:40] == 1).all()
+
+
+@pytest.mark.parametrize("stitch_mode", ["rectangle (full crop)", "extended mask"])
+def test_picture_corner_stays_white_with_preresize_and_padding(cropandstitch_classes, stitch_mode):
+    node_class, upstream = cropandstitch_classes
+    image = torch.zeros(1, 64, 64, 3)
+    mask = torch.zeros(1, 64, 64)
+    mask[:, :16, :16] = 1
+    inputs = _crop_inputs(image, mask)
+    inputs.update(
+        preresize=True, preresize_min_width=128, preresize_min_height=128,
+        output_resize_to_target_size=True, output_target_width=64, output_target_height=64,
+        output_padding="32", downscale_algorithm="nearest", upscale_algorithm="nearest",
+    )
+    stitcher, crop, _, blend = node_class().inpaint_crop(
+        stitch_mask_mode=stitch_mode, stitch_mask_expand_pixels=0, stitch_mask_blend_pixels=16,
+        **inputs,
+    )
+    bounds = image_bounds_in_crop(node_class._geometry_for(stitcher, 0, inputs), 64, 64)
+    left, top = int(bounds[0]), int(bounds[1])
+    assert blend[0, top, left] == 1
+    edited, = upstream.InpaintStitchImproved().inpaint_stitch(stitcher, torch.ones_like(crop))
+    assert edited.shape == (1, 128, 128, 3)
+    assert (edited[0, 0, 0] == 1).all()
 
 
 def test_rectangle_mode_feathers_the_full_crop_boundary(cropandstitch_classes):

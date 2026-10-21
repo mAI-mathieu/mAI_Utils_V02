@@ -13,6 +13,7 @@ from ..utils.separate_stitch_mask import (
     crop_mask_with_stitcher_geometry,
     extend_mask,
     full_crop_feather_mask,
+    image_bounds_in_crop,
     normalize_mask,
     preresize_dimensions,
     stack_stitcher_masks,
@@ -118,8 +119,9 @@ class MAIInpaintCropSeparateStitchMask(_UPSTREAM.InpaintCropImproved):
             processor = self._processor_for(stitcher["device_mode"])
             processing_device = self._processing_device(stitcher["device_mode"])
             processed_stitch_masks = []
-            for _ in range(cropped_image.shape[0]):
+            for index in range(cropped_image.shape[0]):
                 # Rectangle mode deliberately covers the complete crop canvas.
+                geometry = self._geometry_for(stitcher, index, upstream_inputs)
                 full_crop_mask = full_crop_feather_mask(
                     1,
                     cropped_image.shape[1],
@@ -127,6 +129,7 @@ class MAIInpaintCropSeparateStitchMask(_UPSTREAM.InpaintCropImproved):
                     int(stitch_mask_blend_pixels),
                     processing_device,
                     torch.float32,
+                    image_bounds_in_crop(geometry, cropped_image.shape[1], cropped_image.shape[2]),
                 )
                 processed_stitch_masks.append(full_crop_mask.cpu())
 
@@ -176,7 +179,7 @@ class MAIInpaintCropSeparateStitchMask(_UPSTREAM.InpaintCropImproved):
                 self._processing_device(stitcher["device_mode"])
             )
             one_mask = self._preprocess_stitch_mask(one_mask, processor, upstream_inputs)
-            geometry = self._geometry_for(stitcher, index)
+            geometry = self._geometry_for(stitcher, index, upstream_inputs)
             transformed = crop_mask_with_stitcher_geometry(
                 one_mask,
                 geometry,
@@ -231,9 +234,9 @@ class MAIInpaintCropSeparateStitchMask(_UPSTREAM.InpaintCropImproved):
         return mask
 
     @staticmethod
-    def _geometry_for(stitcher, index):
+    def _geometry_for(stitcher, index, inputs=None):
         canvas = stitcher["canvas_image"][index]
-        return {
+        geometry = {
             "canvas_shape": (canvas.shape[1], canvas.shape[2]),
             "canvas_to_orig_x": stitcher["canvas_to_orig_x"][index],
             "canvas_to_orig_y": stitcher["canvas_to_orig_y"][index],
@@ -244,3 +247,18 @@ class MAIInpaintCropSeparateStitchMask(_UPSTREAM.InpaintCropImproved):
             "cropped_to_canvas_w": stitcher["cropped_to_canvas_w"][index],
             "cropped_to_canvas_h": stitcher["cropped_to_canvas_h"][index],
         }
+        if inputs is not None:
+            height, width = inputs["image"].shape[1:3]
+            if inputs["preresize"]:
+                width, height, _ = preresize_dimensions(
+                    width, height, inputs["preresize_mode"],
+                    inputs["preresize_min_width"], inputs["preresize_min_height"],
+                    inputs["preresize_max_width"], inputs["preresize_max_height"],
+                )
+            left = geometry["canvas_to_orig_x"]
+            top = geometry["canvas_to_orig_y"]
+            if inputs["extend_for_outpainting"]:
+                left += int(width * (inputs["extend_left_factor"] - 1.0))
+                top += int(height * (inputs["extend_up_factor"] - 1.0))
+            geometry["source_image_bounds"] = (left, top, left + width, top + height)
+        return geometry
