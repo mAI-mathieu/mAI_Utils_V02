@@ -14,6 +14,14 @@ pixels (unless an explicit dtype conversion is requested). Already aligned
 dimensions are unchanged. Existing modes retain nearest-multiple rounding.
 The mode is appended to the existing dropdown; defaults and sockets are unchanged.
 
+`center_crop` keeps the resize dimensions equal to the source and uses the
+existing centered slicing path to produce the exact requested width and height.
+It ignores multiple rounding and bypasses sampling/clamping. Requests larger
+than the source are rejected, because a crop cannot produce those dimensions.
+Odd differences remove the extra pixel from the bottom/right. As with padding,
+`method_used=identity` indicates a filtering bypass; explicit device and dtype
+conversion remain available. This mode is also appended without socket changes.
+
 BHWC input is permuted to BCHW as a view; no unconditional contiguous copy is
 made. Native methods call `torch.nn.functional.interpolate`. Custom methods
 use two one-dimensional passes. The pass with the smaller intermediate runs

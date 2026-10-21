@@ -29,7 +29,7 @@ def test_node_contract_and_defaults():
     assert node.RETURN_NAMES == ("image", "width", "height", "method_used")
     assert inputs["multiple_of"][0] == "INT"
     assert inputs["multiple_of"][1]["min"] == 1
-    assert inputs["resize_mode"][0] == ["exact", "keep_aspect_fit", "keep_aspect_fill", "keep_aspect", "pad_to_multiple"]
+    assert inputs["resize_mode"][0] == ["exact", "keep_aspect_fit", "keep_aspect_fill", "keep_aspect", "pad_to_multiple", "center_crop"]
     assert inputs["resize_mode"][1]["default"] == "exact"
     defaults = {name:spec[1]["default"] for name,spec in inputs.items() if name != "image"}
     image = torch.ones(1,720,1280,3)
@@ -59,6 +59,16 @@ def test_node_pad_to_multiple_preserves_original_dimensions_and_pixels():
     assert torch.equal(result[:, 3:12, 2:21], image)
     assert not result[:, :3].any() and not result[:, 12:].any()
     assert not result[:, :, :2].any() and not result[:, :, 21:].any()
+
+
+def test_node_center_crop_returns_exact_requested_dimensions():
+    image = torch.randn(2, 9, 19, 3)
+    result, w, h, used = MAIFastGPUResize().run(
+        image, 12, 6, resize_mode="center_crop", multiple_of=8,
+    )
+    assert result.shape == (2, 6, 12, 3)
+    assert (w, h, used) == (12, 6, "identity")
+    assert torch.equal(result, image[:, 1:7, 3:15])
 
 
 @pytest.mark.parametrize("precision,dtype", [("fp32",torch.float32),("fp16",torch.float16),("bf16",torch.bfloat16)])

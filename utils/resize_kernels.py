@@ -11,7 +11,7 @@ import torch.nn.functional as F
 NATIVE_METHODS = ("nearest", "nearest-exact", "bilinear", "bicubic", "area")
 CUSTOM_METHODS = ("lanczos2", "lanczos3", "lanczos4", "mitchell", "catmull_rom")
 RESIZE_METHODS = ("auto",) + NATIVE_METHODS + CUSTOM_METHODS
-RESIZE_MODES = ("exact", "keep_aspect_fit", "keep_aspect_fill", "keep_aspect", "pad_to_multiple")
+RESIZE_MODES = ("exact", "keep_aspect_fit", "keep_aspect_fill", "keep_aspect", "pad_to_multiple", "center_crop")
 # Custom passes hold only one sampled plane per tap. Bound their batch working
 # set conservatively, independently of free VRAM, without probing for OOM.
 CUSTOM_WORKING_BYTES = 512 * 1024 * 1024
@@ -50,6 +50,15 @@ def calculate_target_size(source_width, source_height, width, height,
     """Resolve canvas geometry, or fitted image dimensions for keep_aspect."""
     source_width = _positive_integer(source_width, "Source width")
     source_height = _positive_integer(source_height, "Source height")
+    if resize_mode == "center_crop":
+        width = _positive_integer(width, "Crop width")
+        height = _positive_integer(height, "Crop height")
+        if width > source_width or height > source_height:
+            raise ValueError(
+                f"Center crop size {width}x{height} exceeds source image size "
+                f"{source_width}x{source_height}. Choose width and height no larger than the source."
+            )
+        return ResizeGeometry(width, height, source_width, source_height)
     if resize_mode == "pad_to_multiple":
         return ResizeGeometry(
             round_up_to_multiple(source_width, multiple_of),
@@ -179,7 +188,7 @@ def _finish_geometry(x, geometry, resize_mode):
         dh = geometry.height - x.shape[2]
         if dw or dh:
             return F.pad(x, (dw//2, dw - dw//2, dh//2, dh - dh//2), value=0.0)
-    elif resize_mode == "keep_aspect_fill":
+    elif resize_mode in ("keep_aspect_fill", "center_crop"):
         left = (x.shape[3] - geometry.width) // 2
         top = (x.shape[2] - geometry.height) // 2
         return x[:, :, top:top + geometry.height, left:left + geometry.width]

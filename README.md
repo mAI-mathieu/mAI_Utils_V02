@@ -318,6 +318,16 @@ clamping occurs, regardless of `method` or `antialias`; `method_used` reports
 values are copied exactly. Explicit precision changes still convert pixel dtype.
 Padding fills all channels with zero (transparent black for RGBA).
 
+Use `resize_mode=center_crop` to take a centered crop at exactly the requested
+`width` and `height`, preserving the original pixel scale. It ignores
+`multiple_of`, `method` and `antialias`; no resizing, padding or clamping occurs.
+For example, 1920×1080 cropped to 1280×720 removes 320 pixels from each side
+and 180 from the top/bottom. If the difference is odd, the extra pixel is removed
+from the bottom/right. A requested dimension larger than the source raises a
+clear error. `method_used` reports `identity` for the filtering bypass; keep
+`precision=auto` to preserve pixel values exactly. Device and precision settings
+still apply. Existing modes and defaults are unchanged.
+
 Methods: `nearest`, `nearest-exact`, `bilinear`, `bicubic`, `area`, true
 `lanczos2`/`lanczos3`/`lanczos4`, `mitchell` (B=C=1/3), `catmull_rom`
 (B=0, C=1/2), and `auto`. Auto chooses Lanczos3 if either resize scale ≤0.65,
@@ -365,6 +375,8 @@ reload the workflow. Try `keep_aspect` on a 16:9 image with width/height 1024,
 `multiple_of=1`: verify a 1024×576 output with no borders or cropping.
 Try `pad_to_multiple` with `multiple_of=64` on a 1019×769 image: verify a
 1024×832 canvas with the original image unchanged at the center.
+Try `center_crop` on a 1920×1080 image with width 1280 and height 720: verify
+a centered 1280×720 output with no scaling, even with `multiple_of=64`.
 Automated tests:
 `python -m pytest tests/test_resize_kernels.py tests/test_fast_gpu_resize.py tests/test_gpu_memory.py`.
 Benchmark: `python scripts/benchmark_fast_gpu_resize.py --direct` (CUDA), or

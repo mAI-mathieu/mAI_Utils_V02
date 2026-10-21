@@ -190,6 +190,50 @@ def test_pad_to_multiple_aligned_image_reuses_original(multiple):
     assert result is image and (w, h, used) == (24, 16, "identity")
 
 
+@pytest.mark.parametrize("target", [(19, 9), (12, 6), (13, 5), (19, 4), (10, 9), (1, 1)])
+def test_center_crop_geometry_preserves_source_and_ignores_multiple(target):
+    geometry = calculate_target_size(19, 9, *target, "center_crop", 64)
+    assert (geometry.width, geometry.height) == target
+    assert (geometry.resize_width, geometry.resize_height) == (19, 9)
+
+
+@pytest.mark.parametrize("target", [(20, 9), (19, 10), (20, 10)])
+def test_center_crop_rejects_dimensions_larger_than_source(target):
+    with pytest.raises(ValueError, match="exceeds source image size 19x9"):
+        resize_image_batch(torch.zeros(1, 9, 19, 3), *target, "center_crop")
+
+
+@pytest.mark.parametrize("target", [(0, 5), (5, -1), (True, 5), (5, 1.5)])
+def test_center_crop_rejects_invalid_dimensions(target):
+    with pytest.raises(ValueError, match="Crop (width|height) must be an integer >= 1"):
+        calculate_target_size(19, 9, *target, "center_crop")
+
+
+@pytest.mark.parametrize("method", RESIZE_METHODS)
+@pytest.mark.parametrize("chunk_size", [0, 2])
+def test_center_crop_preserves_exact_pixels_and_batch_without_resampling(method, chunk_size, monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Center crop must not invoke resize kernels")
+
+    monkeypatch.setattr("utils.resize_kernels.resize_native", forbidden)
+    monkeypatch.setattr("utils.resize_kernels.build_sampling_weights", forbidden)
+    image = torch.randn(3, 18, 38, 4)[:, ::2, ::2]
+    before = image.clone()
+    result, w, h, used = resize_image_batch(
+        image, 12, 6, "center_crop", method, multiple_of=8, chunk_size=chunk_size,
+    )
+    assert result.shape == (3, 6, 12, 4)
+    assert (w, h, used) == (12, 6, "identity")
+    assert torch.equal(result, image[:, 1:7, 3:15])
+    assert torch.equal(image, before)
+
+
+def test_center_crop_matching_size_reuses_original():
+    image = torch.randn(2, 9, 19, 3)
+    result, w, h, used = resize_image_batch(image, 19, 9, "center_crop", multiple_of=8)
+    assert result is image and (w, h, used) == (19, 9, "identity")
+
+
 @pytest.mark.parametrize("mode", ["exact", "keep_aspect_fit", "keep_aspect_fill"])
 def test_canvas_multiple_of(mode):
     result, w, h, _ = resize_image_batch(torch.ones(1, 3, 7, 1), 11, 13, mode, multiple_of=8)
@@ -269,6 +313,20 @@ def test_kernel_definitions_and_support():
 
 
 DEVICES = ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])
+
+
+@pytest.mark.parametrize("device", DEVICES)
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16, torch.float64])
+def test_center_crop_preserves_dtype_device_and_honors_precision(device, dtype):
+    image = torch.randn(2, 9, 19, 3, device=device, dtype=dtype)
+    result = resize_image_batch(image, 12, 6, "center_crop")[0]
+    assert result.dtype == dtype and result.device == image.device
+    assert torch.equal(result, image[:, 1:7, 3:15])
+    converted = resize_image_batch(
+        image, 12, 6, "center_crop", compute_device="cpu", precision="fp32", chunk_size=1,
+    )[0]
+    assert converted.dtype == torch.float32 and converted.device.type == "cpu"
+    assert torch.equal(converted, image[:, 1:7, 3:15].cpu().float())
 
 
 @pytest.mark.parametrize("device", DEVICES)
