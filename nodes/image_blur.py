@@ -48,17 +48,16 @@ class MAIImageBlur:
         return {
             "required": {
                 "image": ("IMAGE",),
-                "radius": ("INT", {"default": 8, "min": 0, "max": 128}),
-                "sigma": ("FLOAT", {"default": 3.0, "min": 0.1, "max": 128.0, "step": 0.1}),
+                "strength": ("FLOAT", {"default": 3.0, "min": 0.0, "max": 128.0, "step": 0.1}),
                 "device": (["auto", "cpu", "gpu"], {"default": "auto"}),
             },
         }
 
-    def run(self, image, radius=8, sigma=3.0, device="auto"):
+    def run(self, image, strength=3.0, device="auto"):
         compute_device = None
         try:
             compute_device = resolve_blur_device(image.device, device)
-            return (blur_image(image, radius, sigma, compute_device),)
+            return (blur_image(image, strength, compute_device),)
         except RuntimeError as exc:
             if device != "auto" or (
                 compute_device is not None and compute_device.type != "cuda"
@@ -70,4 +69,4 @@ class MAIImageBlur:
             )
         # Leave the exception handler first so its traceback releases temporary
         # CUDA tensors before allocating CPU work. Never hide CPU errors.
-        return (blur_image(image, radius, sigma, torch.device("cpu")),)
+        return (blur_image(image, strength, torch.device("cpu")),)

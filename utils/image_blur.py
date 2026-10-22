@@ -7,9 +7,11 @@ import torch.nn.functional as F
 
 
 @torch.no_grad()
-def blur_image(image, radius=8, sigma=3.0, compute_device=None):
+def blur_image(image, strength=3.0, compute_device=None):
     """Blur BHWC color channels, preserving shape, dtype, device and RGBA alpha.
 
+    Strength is the Gaussian spread in pixels; zero is an identity operation.
+    Kernel radius is automatically ceil(3 * strength).
     Two separable passes use replicated edges, including for 1x1 images and
     radii larger than the image. Process one batch item at a time to bound
     temporary GPU memory; the full output stays on the input device.
@@ -22,12 +24,15 @@ def blur_image(image, radius=8, sigma=3.0, compute_device=None):
         raise ValueError("image must have 1, 3 or 4 channels")
     if image.dtype not in (torch.float16, torch.bfloat16, torch.float32, torch.float64):
         raise ValueError("image must use float16, bfloat16, float32 or float64")
-    if isinstance(radius, bool) or not isinstance(radius, int) or not 0 <= radius <= 128:
-        raise ValueError("radius must be an integer between 0 and 128")
-    if not math.isfinite(sigma) or sigma <= 0:
-        raise ValueError("sigma must be finite and greater than 0")
-    if radius == 0:
+    if (
+        isinstance(strength, bool) or not isinstance(strength, (int, float))
+        or not math.isfinite(strength) or not 0 <= strength <= 128
+    ):
+        raise ValueError("strength must be a finite number between 0 and 128")
+    if strength == 0:
         return image
+    sigma = float(strength)
+    radius = math.ceil(3 * sigma)
 
     device = image.device if compute_device is None else torch.device(compute_device)
     # CPU padding/convolution support for half types varies. Float32 also
