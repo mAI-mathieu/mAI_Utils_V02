@@ -5,6 +5,50 @@ ComfyUI custom node pack for small, reusable mAI utility nodes.
 Install this folder under ComfyUI's `custom_nodes` directory, then restart ComfyUI.
 The currently registered nodes are listed below.
 
+## mAI image blur
+
+Location: `mAI / Image`. Registered as `MAIImageBlur`.
+Applies a separable Gaussian blur at the original image resolution.
+
+Inputs: `image` (IMAGE), `radius` (INT, default 8, range 0–128), `sigma`
+(FLOAT, default 3.0, range 0.1–128), and `device` (`auto`, `cpu`, `gpu`;
+default `auto`). Radius sets kernel size to `2 * radius + 1`; sigma sets
+the Gaussian spread in pixels. Radius 0 passes the image through unchanged.
+For a typical Gaussian, use radius around three times sigma.
+Output: `image` (IMAGE), retaining input resolution, batch order, device and
+floating dtype. Grayscale, RGB and RGBA batches are supported; RGBA alpha
+is copied unchanged. Edges replicate the nearest pixel, even for 1×1 images.
+
+`auto` uses the input CUDA device or ComfyUI's selected CUDA device when
+available, otherwise CPU. A CUDA runtime failure (including out of memory or
+an unsupported GPU kernel) retries on CPU with a warning showing the reason.
+`cpu` forces CPU computation; `gpu` requires CUDA and reports failures directly.
+CPU processing returns the result to the original input device. Half/bfloat16
+inputs compute in float32, including under autocast; float64 stays float64.
+One image is processed at a time to limit temporary GPU memory.
+
+Uses standard PyTorch operations on Windows and Linux, with no new packages,
+custom CUDA extensions, Triton, or compilation. RTX 5090 and RTX PRO 6000
+Blackwell (interpreting “RTX 600 pro” as this model) require support for
+`sm_120`; B200 requires `sm_100`. Use a ComfyUI PyTorch/CUDA build and NVIDIA
+driver supporting your GPU. PyTorch introduced Blackwell support with its
+[2.7 CUDA 12.8 builds](https://pytorch.org/blog/pytorch-2-7/); select a suitable
+current build using the [official installer](https://pytorch.org/get-started/locally/).
+The node cannot add missing GPU support to an installed PyTorch build.
+
+Limitations: large radii and high resolutions increase runtime and memory.
+CPU fallback is slower and still needs enough system RAM. If the input is
+already on a CUDA device, returning the output also requires that device to
+remain functional; fallback cannot recover a broken CUDA context.
+
+Test in ComfyUI: restart and refresh, add **mAI image blur**, and connect
+**Load Image → mAI image blur → Preview Image**. Queue the defaults and then
+radius 0; verify blur versus the original and unchanged dimensions. Compare
+`cpu` and `auto` results, then try a batch and save/reload the workflow.
+Automated tests: `python -m pytest tests/test_image_blur.py`. CUDA comparisons
+run on every visible CUDA device and skip when CUDA is unavailable; run this
+command on each target OS/GPU to verify that installation.
+
 ## mAI Type Converter
 
 Location: `mAI / Utils`. Registered as `MAITypeConverterNode`.
