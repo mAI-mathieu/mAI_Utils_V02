@@ -1238,15 +1238,20 @@ Default behavior:
 * Expands the mask by `padding` pixels before tracing its contour.
 * Centers even stroke widths across the contour; odd widths place the extra pixel inside.
 * Processes each batch item independently and broadcasts a batch of one where possible.
-* Leaves the image unchanged when the mask contains no included pixels.
+* Returns a copy of the image unchanged when the mask contains no included pixels,
+  even if the blank mask's dimensions or batch size differ from the image.
 * Preserves additional image channels, including alpha; the outline changes RGB only.
 
 Known limitations:
 
-* The mask height and width must match the image.
+* Nonblank masks must match the image height and width.
 * `threshold` uses `0` to `255` while ComfyUI stores mask values internally as `0.0` to `1.0`.
 * The morphology uses square pixel neighborhoods, so heavily padded diagonal corners can look slightly squared.
 * Outlines and padding are clipped at image edges.
+
+Testing: run `python -m pytest tests/test_mask_outline.py`. In ComfyUI, connect an
+image and an all-black mask (including one with a different resolution), then
+queue the node and confirm the output matches the original image without an outline.
 
 ## mAI Save Text File
 

@@ -92,6 +92,44 @@ def test_empty_mask_returns_unchanged_image():
     assert result.data_ptr() != image.data_ptr()
 
 
+@pytest.mark.parametrize(
+    "mask_shape",
+    [(64, 64), (1, 64, 64), (1, 64, 64, 1), (1, 1, 64, 64), (3, 64, 64)],
+)
+def test_blank_placeholder_mask_preserves_image_batch_and_alpha(mask_shape):
+    image = torch.rand((2, 4, 5, 4))
+
+    (result,) = MAIMaskOutline().draw_outline(
+        image, torch.zeros(mask_shape), "#00FF00", 10, 3, 0
+    )
+
+    assert torch.equal(result, image)
+    assert result.dtype == image.dtype
+    assert result.device == image.device
+    assert result.data_ptr() != image.data_ptr()
+
+
+def test_mask_with_no_pixels_above_threshold_returns_unchanged_image():
+    image = torch.rand((1, 4, 5, 3))
+    mask = torch.full((1, 64, 64), 0.25)
+
+    result = draw_mask_outline(image, mask, threshold=128)
+
+    assert torch.equal(result, image)
+
+
+def test_mixed_mask_batch_only_outlines_nonblank_items():
+    image = torch.rand((2, 7, 7, 3))
+    mask = torch.zeros((2, 7, 7))
+    mask[1, 2:5, 2:5] = 1.0
+
+    result = draw_mask_outline(image, mask, color="#00FF00", thickness=1)
+
+    assert torch.equal(result[0], image[0])
+    assert torch.equal(result[1, 2, 3], torch.tensor([0.0, 1.0, 0.0]))
+    assert torch.equal(result[1, 3, 3], image[1, 3, 3])
+
+
 def test_single_mask_broadcasts_over_image_batch_and_preserves_alpha():
     image = torch.zeros((2, 4, 5, 4))
     image[..., 3] = 0.25
@@ -111,7 +149,7 @@ def test_rejects_invalid_color_and_mismatched_dimensions():
     with pytest.raises(ValueError, match="dimensions must match"):
         draw_mask_outline(
             torch.zeros((1, 4, 5, 3)),
-            torch.zeros((1, 5, 5)),
+            torch.ones((1, 5, 5)),
         )
 
 

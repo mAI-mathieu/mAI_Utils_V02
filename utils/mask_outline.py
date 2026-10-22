@@ -178,6 +178,12 @@ def draw_mask_outline(
     """Draw the thresholded mask contour over an image."""
     normalized_image = _normalize_image(image)
     normalized_mask = _normalize_mask(mask)
+    _validate_outline_parameters(thickness, padding, threshold)
+    rgb_channels = parse_hex_color(color)
+    # Blank masks may be placeholders with dimensions unrelated to the image.
+    if not (normalized_mask > (threshold / 255.0)).any().item():
+        return normalized_image.clone()
+
     height, width = normalized_image.shape[1:3]
     if normalized_mask.shape[1:] != (height, width):
         raise ValueError("mask dimensions must match the image dimensions")
@@ -195,7 +201,7 @@ def draw_mask_outline(
 
     output = normalized_image.clone()
     rgb = torch.tensor(
-        parse_hex_color(color),
+        rgb_channels,
         device=output.device,
         dtype=output.dtype,
     ).view(1, 1, 1, 3)
