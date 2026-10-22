@@ -295,7 +295,8 @@ Outputs in order: `image` (IMAGE), `width` (INT), `height` (INT),
 The mask output is appended; the original four outputs keep their positions.
 
 An optional mask follows the image's exact resize/crop/padding geometry, method,
-antialias setting, multiple rounding and explicit precision. Fit/black padding
+antialias setting, multiple rounding and precision (except the pixel-preserving
+padding/crop modes described below). Fit/black padding
 uses zero mask values; edge padding repeats mask border values. Masks must have
 the source image's width/height and shape `[B,H,W]` or `[H,W]`. A single mask
 broadcasts over all image frames; otherwise batch sizes must match. Mismatched
@@ -327,8 +328,8 @@ height inputs are ignored in this mode. For example, a 1019×769 image with
 Already aligned dimensions stay unchanged; `multiple_of=1` adds no padding.
 Extra pixels go on the bottom/right when padding is odd. No resampling or
 clamping occurs, regardless of `method` or `antialias`; `method_used` reports
-`identity` because filtering is bypassed. With `precision=auto`, original pixel
-values are copied exactly. Explicit precision changes still convert pixel dtype.
+`identity` because filtering is bypassed. Original pixel values and dtype are
+always preserved, even if a saved workflow specifies an explicit precision.
 Padding fills all channels with zero (transparent black for RGBA).
 
 Use `resize_mode=pad_to_multiple_edge` for the same canvas dimensions and
@@ -337,8 +338,8 @@ pixels outward. Top/bottom repeat the outermost rows, left/right repeat the
 outermost columns, and corners repeat the corner pixels. All channels,
 including alpha, are extended. Width/height are ignored; `multiple_of` controls
 the canvas. Aligned dimensions stay unchanged. No filtering or clamping occurs,
-and `method_used` reports `identity`. Keep `precision=auto` for exact original
-pixel values. This repeats the outermost pixels; it does not generate new detail.
+and `method_used` reports `identity`. Original pixel values and dtype are always
+preserved. This repeats the outermost pixels; it does not generate new detail.
 
 Use `resize_mode=center_crop` to take a centered crop at exactly the requested
 `width` and `height`, preserving the original pixel scale. It ignores
@@ -346,9 +347,15 @@ Use `resize_mode=center_crop` to take a centered crop at exactly the requested
 For example, 1920×1080 cropped to 1280×720 removes 320 pixels from each side
 and 180 from the top/bottom. If the difference is odd, the extra pixel is removed
 from the bottom/right. A requested dimension larger than the source raises a
-clear error. `method_used` reports `identity` for the filtering bypass; keep
-`precision=auto` to preserve pixel values exactly. Device and precision settings
-still apply. Existing modes and defaults are unchanged.
+clear error. `method_used` reports `identity` for the filtering bypass; retained
+pixels and dtype are always preserved exactly.
+
+In these three modes, `method`, `antialias` and `precision` are ignored by the
+backend and hidden in the node UI. Switching to a resizing mode restores the
+controls with their saved values. Connected sockets remain intact. Device
+selection still applies without changing pixel values. Optional masks also keep
+their own source values and dtype. Center crop removes pixels outside the crop;
+all retained pixels are unchanged. Other modes and defaults are unchanged.
 
 Methods: `nearest`, `nearest-exact`, `bilinear`, `bicubic`, `area`, true
 `lanczos2`/`lanczos3`/`lanczos4`, `mitchell` (B=C=1/3), `catmull_rom`
@@ -364,7 +371,7 @@ Lanczos/custom cubic/bicubic results clamp to [0,1] after reconstruction.
 `device=auto` preserves the input device, including CPU. Choose `gpu` to move
 a CPU batch to ComfyUI's preferred CUDA device, or `cpu` to explicitly move it
 back. Output stays on the processing device. `precision=auto` preserves input
-dtype; explicit fp32/fp16/bf16 controls output dtype. Custom kernels accumulate
+dtype; explicit fp32/fp16/bf16 controls output dtype in resizing modes. Custom kernels accumulate
 in FP32 (FP64 for FP64 input); native antialiased reduced precision and CPU
 linear/cubic/area use FP32 internally when needed. Matching-size inputs bypass
 filtering and copying, while honoring explicit device/dtype changes.
@@ -401,11 +408,15 @@ Switch to `pad_to_multiple_edge`: verify the same canvas dimensions with the
 border colors stretched through the padding and the original image unchanged.
 Try `center_crop` on a 1920×1080 image with width 1280 and height 720: verify
 a centered 1280×720 output with no scaling, even with `multiple_of=64`.
+For all three padding/crop modes, verify method, antialias and precision are
+hidden, including after saving/reloading. Switch back to `exact` to check that
+the controls reappear with their previous values.
 Connect a source-size mask to `mask`, then view the final mask output with
 Mask to Image and Preview Image. Verify its alignment with the image in resize,
 crop and both padding modes. Disconnect the input to verify an all-zero output.
 Automated tests:
 `python -m pytest tests/test_resize_kernels.py tests/test_resize_masks.py tests/test_fast_gpu_resize.py tests/test_gpu_memory.py`.
+Frontend visibility checks: `node tests/fast_gpu_resize_frontend.mjs`.
 Benchmark: `python scripts/benchmark_fast_gpu_resize.py --direct` (CUDA), or
 `--device cpu --smoke`. Measurements and architecture details:
 [Fast GPU Resize notes](docs/fast_gpu_resize.md).

@@ -15,6 +15,7 @@ RESIZE_MODES = (
     "exact", "keep_aspect_fit", "keep_aspect_fill", "keep_aspect",
     "pad_to_multiple", "center_crop", "pad_to_multiple_edge",
 )
+PIXEL_PRESERVING_MODES = ("pad_to_multiple", "pad_to_multiple_edge", "center_crop")
 # Custom passes hold only one sampled plane per tap. Bound their batch working
 # set conservatively, independently of free VRAM, without probing for OOM.
 CUSTOM_WORKING_BYTES = 512 * 1024 * 1024
@@ -243,7 +244,9 @@ def resize_image_batch(image, width, height, resize_mode="exact", method="auto",
         raise ValueError("antialias must be a boolean.")
     geometry = calculate_target_size(image.shape[2], image.shape[1], width, height, resize_mode, multiple_of)
     device = image.device if compute_device is None else torch.device(compute_device)
-    dtype = resolve_output_dtype(image.dtype, precision)
+    # Padding and cropping must copy source values exactly, even when a saved
+    # workflow requests reduced precision. Device transfers remain lossless.
+    dtype = image.dtype if resize_mode in PIXEL_PRESERVING_MODES else resolve_output_dtype(image.dtype, precision)
     same_size = (image.shape[2], image.shape[1]) == (geometry.resize_width, geometry.resize_height)
     method_used = "identity" if same_size else method
     if method_used == "auto":

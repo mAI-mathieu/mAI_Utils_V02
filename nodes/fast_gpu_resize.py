@@ -46,6 +46,8 @@ class MAIFastGPUResize:
         "Pad to multiple keeps the original image size and only adds black padding. "
         "Center crop takes the exact width/height from the original without resizing. "
         "Pad to multiple edge extends the border pixels instead of padding black. "
+        "These padding/crop modes preserve source pixels and dtype exactly; "
+        "method, antialias and precision are ignored. "
         "An optional source-size mask follows the same transform; absent masks output zeros."
     )
 
@@ -57,12 +59,14 @@ class MAIFastGPUResize:
             "height": ("INT", {"default": 720, "min": 1, "max": 16384}),
             "resize_mode": (list(RESIZE_MODES), {"default": "exact",
                                                "tooltip": "keep_aspect fits within width/height without padding or cropping. pad_to_multiple and pad_to_multiple_edge ignore width/height and preserve original image size, padding to the next multiple_of with black or stretched edge pixels. center_crop crops the original to exact width/height without resizing; dimensions must not exceed the source."}),
-            "method": (list(RESIZE_METHODS), {"default": "auto"}),
+            "method": (list(RESIZE_METHODS), {"default": "auto",
+                                             "tooltip": "Interpolation method. Ignored in pad_to_multiple, pad_to_multiple_edge and center_crop; original pixels are copied exactly."}),
             "antialias": ("BOOLEAN", {"default": True}),
             "multiple_of": ("INT", {"default": 1, "min": 1, "max": 16384, "step": 1,
                                     "tooltip": "Round output width and height to the nearest multiple; ties round upward. pad_to_multiple and pad_to_multiple_edge only pad original dimensions upward, leaving aligned dimensions unchanged. 1 disables rounding/padding. Ignored in center_crop mode so width/height stay exact."}),
             "device": (["auto", "gpu", "cpu"], {"default": "auto"}),
-            "precision": (["auto", "fp32", "fp16", "bf16"], {"default": "auto"}),
+            "precision": (["auto", "fp32", "fp16", "bf16"], {"default": "auto",
+                                                                    "tooltip": "Output dtype for resizing. Ignored in pad_to_multiple, pad_to_multiple_edge and center_crop to preserve original pixel values and dtype."}),
             "chunk_size": ("INT", {"default": 0, "min": 0, "max": 1000000,
                                    "tooltip": "0: whole batch for native modes, automatic memory-bounded chunks for custom kernels. Positive: frames per chunk."}),
         }, "optional": {

@@ -359,7 +359,7 @@ DEVICES = ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])
 
 @pytest.mark.parametrize("device", DEVICES)
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16, torch.float64])
-def test_edge_padding_preserves_dtype_device_and_honors_precision(device, dtype):
+def test_edge_padding_preserves_dtype_device_and_ignores_precision(device, dtype):
     image = torch.randn(2, 3, 7, 4, device=device, dtype=dtype)
     result = resize_image_batch(image, 1, 1, "pad_to_multiple_edge", multiple_of=4)[0]
     assert result.dtype == dtype and result.device == image.device
@@ -371,13 +371,13 @@ def test_edge_padding_preserves_dtype_device_and_honors_precision(device, dtype)
         image, 1, 1, "pad_to_multiple_edge", multiple_of=4,
         compute_device="cpu", precision="fp32", chunk_size=1,
     )[0]
-    assert converted.dtype == torch.float32 and converted.device.type == "cpu"
-    assert torch.equal(converted, result.cpu().float())
+    assert converted.dtype == dtype and converted.device.type == "cpu"
+    assert torch.equal(converted, result.cpu())
 
 
 @pytest.mark.parametrize("device", DEVICES)
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16, torch.float64])
-def test_center_crop_preserves_dtype_device_and_honors_precision(device, dtype):
+def test_center_crop_preserves_dtype_device_and_ignores_precision(device, dtype):
     image = torch.randn(2, 9, 19, 3, device=device, dtype=dtype)
     result = resize_image_batch(image, 12, 6, "center_crop")[0]
     assert result.dtype == dtype and result.device == image.device
@@ -385,13 +385,13 @@ def test_center_crop_preserves_dtype_device_and_honors_precision(device, dtype):
     converted = resize_image_batch(
         image, 12, 6, "center_crop", compute_device="cpu", precision="fp32", chunk_size=1,
     )[0]
-    assert converted.dtype == torch.float32 and converted.device.type == "cpu"
-    assert torch.equal(converted, image[:, 1:7, 3:15].cpu().float())
+    assert converted.dtype == dtype and converted.device.type == "cpu"
+    assert torch.equal(converted, image[:, 1:7, 3:15].cpu())
 
 
 @pytest.mark.parametrize("device", DEVICES)
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16, torch.float64])
-def test_pad_to_multiple_preserves_dtype_device_and_honors_precision(device, dtype):
+def test_pad_to_multiple_preserves_dtype_device_and_ignores_precision(device, dtype):
     image = torch.randn(2, 3, 7, 3, device=device, dtype=dtype)
     result = resize_image_batch(image, 1, 1, "pad_to_multiple", multiple_of=4)[0]
     assert result.dtype == dtype and result.device == image.device
@@ -401,8 +401,8 @@ def test_pad_to_multiple_preserves_dtype_device_and_honors_precision(device, dty
         image, 1, 1, "pad_to_multiple", multiple_of=4,
         compute_device="cpu", precision="fp32", chunk_size=1,
     )[0]
-    assert converted.dtype == torch.float32 and converted.device.type == "cpu"
-    assert torch.equal(converted[:, :3, :7], image.cpu().float())
+    assert converted.dtype == dtype and converted.device.type == "cpu"
+    assert torch.equal(converted[:, :3, :7], image.cpu())
 
 
 @pytest.mark.parametrize("device", DEVICES)

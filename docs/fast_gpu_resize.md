@@ -10,7 +10,7 @@ Registration adds only `MAIFastGPUResize` to the existing root mappings.
 broadcasts single masks to the image batch using a view. Prepared masks pass
 through the same tensor resizing implementation as one-channel BHWC images,
 with identical geometry and sampling settings. Masks move to the output image
-device, use the requested precision, and return as BHW. Padding follows the image
+device, use the requested precision in resizing modes, and return as BHW. Padding follows the image
 mode, including replicated borders. Missing masks produce output-size zeros.
 The node appends a MASK output after the original four outputs, preserving their
 names, types and positions; the optional input adds no serialized widget.
@@ -19,14 +19,14 @@ names, types and positions; the optional input adds no serialized widget.
 up to the smallest multiple at least as large as the source. Requested width
 and height are ignored. Resize dimensions stay equal to the source, so the
 existing identity filtering bypass and centered zero padding preserve original
-pixels (unless an explicit dtype conversion is requested). Already aligned
+pixels and source dtype regardless of the requested precision. Already aligned
 dimensions are unchanged. Existing modes retain nearest-multiple rounding.
 The mode is appended to the existing dropdown; defaults and sockets are unchanged.
 
 `pad_to_multiple_edge` shares the same source-based geometry and bypasses
 filtering, but uses torch replicate padding to extend the outermost rows,
 columns and corner pixels. This preserves all original values and channels,
-including alpha, with `precision=auto`. It also supports one-pixel source axes
+including alpha, regardless of the requested precision. It also supports one-pixel source axes
 and padding larger than the source. Existing black padding modes are unchanged.
 
 `center_crop` keeps the resize dimensions equal to the source and uses the
@@ -34,8 +34,16 @@ existing centered slicing path to produce the exact requested width and height.
 It ignores multiple rounding and bypasses sampling/clamping. Requests larger
 than the source are rejected, because a crop cannot produce those dimensions.
 Odd differences remove the extra pixel from the bottom/right. As with padding,
-`method_used=identity` indicates a filtering bypass; explicit device and dtype
-conversion remain available. This mode is also appended without socket changes.
+`method_used=identity` indicates a filtering bypass; explicit device transfer
+remains available, while dtype conversion is disabled to preserve exact pixels.
+This mode is also appended without socket changes.
+
+All three modes ignore `method`, `antialias` and `precision` in the backend,
+including when called without frontend JavaScript. Each image/mask retains its
+own input dtype. `web/js/fast_gpu_resize.js` hides these controls for padding and
+center crop, then restores their saved values when a resizing mode is selected.
+Widget order, serialization and sockets are preserved. Test visibility with
+`node tests/fast_gpu_resize_frontend.mjs`.
 
 BHWC input is permuted to BCHW as a view; no unconditional contiguous copy is
 made. Native methods call `torch.nn.functional.interpolate`. Custom methods

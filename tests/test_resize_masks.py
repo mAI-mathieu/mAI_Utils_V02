@@ -95,10 +95,41 @@ def test_mask_precision_is_honored(precision, dtype):
     mask = torch.rand(2, 9, 13, dtype=torch.float64)
     image = mask.unsqueeze(-1).expand(-1, -1, -1, 3)
     result, _, _, _, output_mask = MAIFastGPUResize().run(
-        image, 8, 6, resize_mode="center_crop", precision=precision, mask=mask,
+        image, 8, 6, resize_mode="exact", method="nearest", precision=precision, mask=mask,
     )
     assert output_mask.dtype == dtype and result.dtype == dtype
-    assert torch.equal(output_mask, mask[:, 1:7, 2:10].to(dtype))
+    assert torch.equal(output_mask, result[..., 0])
+
+
+@pytest.mark.parametrize("mode", ["pad_to_multiple", "pad_to_multiple_edge", "center_crop"])
+@pytest.mark.parametrize("precision", ["fp32", "fp16", "bf16"])
+@pytest.mark.parametrize("chunk_size", [0, 2])
+def test_padding_and_crop_preserve_image_and_mask_despite_precision(mode, precision, chunk_size, monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Pixel-preserving modes must not resample")
+
+    monkeypatch.setattr("utils.resize_kernels.resize_native", forbidden)
+    monkeypatch.setattr("utils.resize_kernels.build_sampling_weights", forbidden)
+    # Noncontiguous values outside [0,1] and extra precision catch casts/clamps.
+    image = torch.linspace(-0.123456789, 1.987654321, 3 * 18 * 26 * 4,
+                           dtype=torch.float64).reshape(3, 18, 26, 4)[:, ::2, ::2]
+    mask = image[..., 0].float()
+    before_image, before_mask = image.clone(), mask.clone()
+    result, w, h, used, output_mask = MAIFastGPUResize().run(
+        image, 8, 6, resize_mode=mode, method="lanczos4", antialias=True,
+        multiple_of=8, precision=precision, chunk_size=chunk_size, mask=mask,
+    )
+    assert used == "identity"
+    assert result.dtype == image.dtype and output_mask.dtype == mask.dtype
+    if mode == "center_crop":
+        assert (w, h) == (8, 6)
+        assert torch.equal(result, image[:, 1:7, 2:10])
+        assert torch.equal(output_mask, mask[:, 1:7, 2:10])
+    else:
+        assert (w, h) == (16, 16)
+        assert torch.equal(result[:, 3:12, 1:14], image)
+        assert torch.equal(output_mask[:, 3:12, 1:14], mask)
+    assert torch.equal(image, before_image) and torch.equal(mask, before_mask)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")
