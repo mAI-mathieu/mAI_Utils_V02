@@ -5,6 +5,29 @@ ComfyUI custom node pack for small, reusable mAI utility nodes.
 Install this folder under ComfyUI's `custom_nodes` directory, then restart ComfyUI.
 The currently registered nodes are listed below.
 
+## mAI int to nearest multiple
+
+Location: `mAI / Utils`. Registered as `MAIIntToNearestMultiple`.
+Rounds an integer to the closest multiple in the selected direction.
+
+Required inputs: `value` (INT, default 0), `multiple` (positive INT, default 8),
+and `rounding` (`round up` or `round down`, default `round down`). Both integer
+widgets can also accept connected INT outputs. Output: `value` (INT).
+For value 100 and multiple 64, down returns 64 and up returns 128.
+Exact multiples, including zero, stay unchanged. Negative values are supported:
+-100 with multiple 64 becomes -128 down or -64 up.
+
+Limitations: zero and negative divisors raise a clear error. Rounding uses exact
+integer arithmetic; manual widgets are limited to JavaScript's safe integer
+range (absolute value at most `2**53 - 1`). Larger connected Python integers
+remain exact in backend execution. No new dependencies or frontend code.
+
+Test in ComfyUI: restart and refresh, add **mAI int to nearest multiple**, set
+value 100 and multiple 64, and connect `value` to an INT input or a value viewer.
+Queue each rounding mode and check 64/128, then try exact multiples and save/
+reload the workflow. Automated tests:
+`python -m pytest --confcutdir=tests tests/test_integer_multiples.py`.
+
 ## mAI image blur
 
 Location: `mAI / Image`. Registered as `MAIImageBlur`.
