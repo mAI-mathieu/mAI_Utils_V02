@@ -15,7 +15,7 @@ Composites two aligned, same-size images. Required inputs:
 * `source_mask` (MASK): **applies to source_image**. White (1) takes the source
   exactly; black (0) keeps the destination exactly. Gray values strictly between
   0 and 1 define the feather area. Values are clamped to 0–1.
-* `blend_mode`: four separate modes, described below.
+* `blend_mode`: five modes, described below.
 
 Modes:
 
@@ -29,11 +29,17 @@ Modes:
   multiple detail scales. Corrections fade toward the hard mask endpoints and
   apply only to gray pixels. Optional `multiband_levels` defaults to 5 (1–10);
   1 equals normal feather, and larger values blend larger features.
+* `content_aware_seam_multiband`: first finds the content-aware seam, then
+  blends around that seam using multiband pyramids. Uses `multiband_levels`
+  (default 5); 1 gives the exact unsmoothed content-aware cut. The original
+  `source_mask` still limits all corrections to gray pixels, fading them toward
+  black/white endpoints. This mode combines seam placement and smoothing.
 
 Output: one `image` (IMAGE), at destination resolution, dtype and device.
 RGB/RGBA images must have matching channels. Masks accept `[H,W]` or `[B,H,W]`.
 Singleton image/mask batches broadcast; other batch mismatches raise an error.
-RGBA alpha follows the selected mask (ordinary feather in multiband mode).
+RGBA alpha follows the selected mask: ordinary feather in `multiband`, or the
+hard content-aware seam in `content_aware_seam_multiband`; pyramids blend RGB.
 Input tensors are not modified. Empty/full/binary masks keep exact endpoints
 in every mode. The node uses existing feathering and never creates a new band.
 
@@ -41,16 +47,18 @@ Limitations: images must already be aligned and at the same resolution; there
 are no positioning or resizing controls. Hard masks have no feather area, so
 all modes give the same hard composite. Seam cuts can change small structures
 within gray pixels; multiband can soften details there. Very narrow feather
-bands limit all blending. Content-aware analysis uses SciPy, already required
-by ComfyUI, and automatically reduces the search resolution when there are
+bands limit all blending. Both content-aware modes use SciPy, already required
+by ComfyUI, and automatically reduce the search resolution when there are
 more than 262,144 gray pixels; final hard endpoints remain exact at native
-resolution. Other modes use PyTorch. No new packages are required.
+resolution. Multiband processing uses PyTorch. No new packages are required.
 
 Test in ComfyUI: restart, refresh, add **mAI image composite masked**, connect
 two aligned images and a feathered mask to `source_mask`, and preview `image`.
-Compare all four `blend_mode` choices. Check that black areas keep the
-destination and white areas take the source in every mode. For multiband,
-compare levels 1 and 5. Automated tests:
+Compare all five `blend_mode` choices. Check that black areas keep the
+destination and white areas take the source in every mode. For both multiband
+modes, compare levels 1 and 5; the combined mode at level 1 should match
+`content_aware_seam` exactly, while level 5 smooths around the same seam.
+Automated tests:
 `python -m pytest --confcutdir=tests tests/test_masked_image_composite.py`.
 
 ## mAI mask fill

@@ -81,7 +81,9 @@ def test_uniform_masks_and_tiny_images_are_safe(mode, mask_value):
     destination = torch.zeros(1, 1, 1, 3)
     source = torch.ones_like(destination)
     result = composite_with_source_mask(destination, source, torch.full((1, 1), mask_value), mode)
-    expected = 1 if mask_value == 0.5 and mode in ("center_cut", "content_aware_seam") else mask_value
+    expected = 1 if mask_value == 0.5 and mode in (
+        "center_cut", "content_aware_seam", "content_aware_seam_multiband",
+    ) else mask_value
     assert torch.equal(result, torch.full_like(result, expected))
 
 
@@ -118,6 +120,45 @@ def test_multiband_rgba_alpha_uses_supplied_feather_without_pyramid_corrections(
     assert torch.equal(result[..., 3], expected)
 
 
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32, torch.float64])
+def test_combined_one_level_is_exactly_the_content_aware_cut(dtype):
+    destination = torch.rand(2, 9, 11, 4, dtype=dtype)
+    source = torch.rand_like(destination)
+    mask = torch.linspace(0, 1, 11)[None, None].expand(1, 9, 11)
+    cut = composite_with_source_mask(destination, source, mask, "content_aware_seam")
+    combined = composite_with_source_mask(destination, source, mask, "content_aware_seam_multiband", 1)
+    assert torch.equal(combined, cut)
+
+
+def test_combined_mode_follows_the_optimized_seam_and_smooths_its_transition():
+    destination = torch.zeros(1, 9, 11, 3)
+    source = torch.full_like(destination, 0.9)
+    source[:, :, 2:4] = 0.01
+    mask = torch.linspace(0, 1, 11)[None, None].expand(1, 9, 11)
+    cut = composite_with_source_mask(destination, source, mask, "content_aware_seam")
+    multiband = composite_with_source_mask(destination, source, mask, "multiband", 3)
+    combined = composite_with_source_mask(destination, source, mask, "content_aware_seam_multiband", 3)
+
+    assert not torch.allclose(combined, cut)
+    assert not torch.allclose(combined, multiband)
+    # The seam lies left of mask 0.5. Combined blending must keep that shift,
+    # while smoothing the hard source selection at the right of the corridor.
+    assert (combined[:, :, 4] > multiband[:, :, 4]).all()
+    assert ((combined[:, :, 4] > destination[:, :, 4]) & (combined[:, :, 4] < source[:, :, 4])).all()
+    assert torch.equal(combined[mask == 0], destination[mask == 0])
+    assert torch.equal(combined[mask == 1], source[mask == 1])
+
+
+def test_combined_rgba_alpha_follows_the_hard_seam_while_rgb_is_smoothed():
+    destination = torch.zeros(1, 9, 11, 4)
+    source = torch.ones_like(destination)
+    mask = torch.linspace(0, 1, 11)[None, None].expand(1, 9, 11)
+    cut = composite_with_source_mask(destination, source, mask, "content_aware_seam")
+    combined = composite_with_source_mask(destination, source, mask, "content_aware_seam_multiband")
+    assert torch.equal(combined[..., 3], cut[..., 3])
+    assert not torch.allclose(combined[..., :3], cut[..., :3])
+
+
 @pytest.mark.parametrize("mode", BLEND_MODES)
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32, torch.float64])
 def test_dtypes_noncontiguous_inputs_and_identical_image_roundtrip(mode, dtype):
@@ -147,7 +188,8 @@ def test_singleton_batches_broadcast_across_images_or_masks_and_mask_is_clamped(
     assert torch.equal(result[1], source[0])
 
 
-def test_reduced_graph_search_cannot_change_native_hard_endpoints(monkeypatch):
+@pytest.mark.parametrize("mode", ["content_aware_seam", "content_aware_seam_multiband"])
+def test_reduced_graph_search_cannot_change_native_hard_endpoints(monkeypatch, mode):
     monkeypatch.setattr(composite_utils, "MAX_SEAM_PIXELS", 20)
     original_cut = composite_utils._graph_cut
     sizes = []
@@ -163,17 +205,18 @@ def test_reduced_graph_search_cannot_change_native_hard_endpoints(monkeypatch):
     mask[:, 0, :] = 0
     mask[:, -1, :] = 1
     mask[:, 7, 9] = 0  # A native one-pixel hole must survive coarse analysis.
-    result = composite_with_source_mask(destination, source, mask, "content_aware_seam")
+    result = composite_with_source_mask(destination, source, mask, mode)
     assert sizes and sizes[0] <= 20
     assert torch.equal(result[mask == 0], destination[mask == 0])
     assert torch.equal(result[mask == 1], source[mask == 1])
 
 
-def test_missing_scipy_reports_an_actionable_error_only_for_content_seam(monkeypatch):
+@pytest.mark.parametrize("mode", ["content_aware_seam", "content_aware_seam_multiband"])
+def test_missing_scipy_reports_an_actionable_error_only_for_content_seam(monkeypatch, mode):
     monkeypatch.setitem(sys.modules, "scipy.sparse", None)
     image = torch.rand(1, 3, 5, 3)
     with pytest.raises(RuntimeError, match="Install scipy"):
-        composite_with_source_mask(image, 1 - image, torch.full((3, 5), 0.5), "content_aware_seam")
+        composite_with_source_mask(image, 1 - image, torch.full((3, 5), 0.5), mode)
     for mode in ("feather", "center_cut", "multiband"):
         composite_with_source_mask(image, 1 - image, torch.full((3, 5), 0.5), mode)
 
@@ -232,6 +275,8 @@ def test_node_contract_default_optional_setting_and_existing_pack_registrations(
     assert list(required) == ["destination_image", "source_image", "source_mask", "blend_mode"]
     assert required["source_mask"][0] == "MASK"
     assert required["blend_mode"][0] == list(BLEND_MODES)
+    assert list(BLEND_MODES) == ["feather", "content_aware_seam", "center_cut", "multiband",
+                               "content_aware_seam_multiband"]
     assert node.CATEGORY == "mAI / Image"
     assert node.RETURN_TYPES == ("IMAGE",) and node.RETURN_NAMES == ("image",)
     assert torch.equal(node.run(torch.zeros(1, 2, 3, 3), torch.ones(1, 2, 3, 3),

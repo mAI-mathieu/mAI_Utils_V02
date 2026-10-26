@@ -7,7 +7,10 @@ import torch
 import torch.nn.functional as F
 
 
-BLEND_MODES = ("feather", "content_aware_seam", "center_cut", "multiband")
+BLEND_MODES = (
+    "feather", "content_aware_seam", "center_cut", "multiband",
+    "content_aware_seam_multiband",
+)
 MAX_SEAM_PIXELS = 262144
 
 
@@ -54,7 +57,7 @@ def _graph_cut(alpha, difference):
         from scipy.sparse.csgraph import breadth_first_order, maximum_flow
     except ImportError as exc:
         raise RuntimeError(
-            "content_aware_seam requires SciPy (normally supplied by ComfyUI). "
+            "Content-aware seam modes require SciPy (normally supplied by ComfyUI). "
             "Install scipy in the ComfyUI Python environment, then restart."
         ) from exc
 
@@ -190,20 +193,26 @@ def composite_with_source_mask(destination_image, source_image, source_mask,
             src = source[index].to(mask.dtype)
             if blend_mode == "center_cut":
                 alpha = (mask >= 0.5).to(mask.dtype)
-            elif blend_mode == "content_aware_seam":
+            elif blend_mode in ("content_aware_seam", "content_aware_seam_multiband"):
                 alpha = _content_aware_alpha(dest, src, mask)
             else:
                 alpha = mask
             blended = torch.lerp(dest, src, alpha[..., None])
-            if blend_mode == "multiband":
-                color = _multiband(dest, src, mask, multiband_levels)
+            if blend_mode in ("multiband", "content_aware_seam_multiband"):
+                # The combined mode builds its mask pyramid from the optimized
+                # seam, so broad transitions follow that seam rather than the
+                # original mask's 50% contour. The original mask still limits
+                # where the correction is allowed to change output pixels.
+                color = _multiband(dest, src, alpha, multiband_levels)
                 # Fade the pyramid correction to zero at the hard mask edges.
                 # Pyramid neighborhoods may read outside the feather; only gray
-                # pixels receive corrections. RGBA alpha uses ordinary feather.
+                # pixels receive corrections. RGBA alpha follows alpha above:
+                # ordinary feather, or the hard seam in the combined mode.
                 envelope = (4 * mask * (1 - mask))[..., None]
                 blended[..., :3] = torch.lerp(blended[..., :3], color, envelope).clamp(0, 1)
             blended = blended.to(output.dtype)
-            if blend_mode in ("center_cut", "content_aware_seam"):
+            if (blend_mode in ("center_cut", "content_aware_seam")
+                    or (blend_mode == "content_aware_seam_multiband" and multiband_levels == 1)):
                 # Hard cuts select native pixels exactly, avoiding lerp rounding.
                 blended = torch.where(alpha[..., None] >= 0.5, source[index], destination[index])
             blended = torch.where(source[index] == destination[index], destination[index], blended)

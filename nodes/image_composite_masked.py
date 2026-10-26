@@ -25,11 +25,11 @@ class MAIImageCompositeMasked:
                 "destination_image": ("IMAGE", {"tooltip": "Background/base image. Kept wherever source_mask is black (0)."}),
                 "source_image": ("IMAGE", {"tooltip": "Image placed onto destination_image. Taken exactly wherever source_mask is white (1). Same size and channels as destination_image."}),
                 "source_mask": ("MASK", {"tooltip": "Applies to source_image: white = take source, black = keep destination, gray (0 < mask < 1) = feather area. No extra feather is generated."}),
-                "blend_mode": (list(BLEND_MODES), {"default": "feather", "tooltip": "Separate modes: normal feather, content-aware graph-cut seam, hard cut at mask 0.5, or multiband blending. Changes stay inside gray mask pixels."}),
+                "blend_mode": (list(BLEND_MODES), {"default": "feather", "tooltip": "Normal feather, content-aware seam, center cut, multiband, or content_aware_seam_multiband (find the seam, then blend around it). Changes stay inside gray mask pixels."}),
             },
             "optional": {
                 "multiband_levels": ("INT", {"default": 5, "min": 1, "max": 10,
-                                            "tooltip": "Pyramid levels, used only by multiband. More levels blend larger features; 1 equals normal feather."}),
+                                            "tooltip": "Pyramid levels for multiband and content_aware_seam_multiband. More levels blend larger features; 1 gives normal feather or the unsmoothed content-aware seam, respectively."}),
             },
         }
 
