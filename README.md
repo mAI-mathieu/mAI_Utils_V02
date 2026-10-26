@@ -646,6 +646,60 @@ missing-image behavior. Toggle true again to restore the image. Also try leaving
 the gate's image input unconnected. Automated tests:
 `python -m pytest tests/test_image_gate.py`.
 
+## mAI scheduled LoRA
+
+Location: `mAI / Utils`. Registered as `MAIScheduledLora`.
+Changes a diffusion-model LoRA's strength during generation using an editable
+timeline. Inputs: `model` (MODEL), `positive` and `negative` (CONDITIONING),
+`lora_name` (installed LoRA dropdown), `schedule` (multiline STRING), and
+`interpolation` (`linear` by default, or `constant`). Outputs, in order:
+`model` (MODEL), `positive` (CONDITIONING), `negative` (CONDITIONING).
+Connect **all three outputs** to the sampler. Keep the original CLIP connected
+to your text encoders; this node schedules only the diffusion-model weights.
+
+Enter `percent:strength` points, one per line or separated by commas.
+Percentages use **0–100**, must increase, and cannot repeat. Strengths can be
+negative or positive (-100 to 100). Linear interpolation fades between points;
+constant interpolation switches at each point. Before the first point and
+after the last point, that endpoint strength is held. A single point gives a
+constant strength. An all-zero timeline bypasses file loading and model cloning.
+
+Default timeline:
+
+```text
+0:1
+10:1
+40:0
+100:0
+```
+
+This holds strength 1 for the first 10%, fades to 0 over the next 30%, then
+stays off. To fade in and out, try `0:0, 20:1, 60:1, 100:0`. For abrupt changes,
+select `constant`. Configure the timeline before queuing; this is not a live
+slider for changing a running job.
+
+Progress follows the **actual sigma intervals of the current sampler run**,
+not the model's training timestep percentages. With 20 steps, indices 0 and 2
+are 0% and 10%; index 8 is 40%. Each step starts at index / step count, so a
+point at 100% is the terminal boundary, usually not a model evaluation.
+Intermediate evaluations in multistage samplers interpolate within the interval.
+With reduced denoise, truncated steps, or multiple sampler passes, each executed
+pass gets its own 0–100% timeline. Adaptive samplers that choose their own steps
+do not guarantee these percentages. Custom samplers must supply `sample_sigmas`
+with finite, strictly decreasing boundaries. This node requires native ComfyUI
+weight hooks and uses a non-dynamic model clone; changing weights can slow
+sampling. Compatibility follows native LoRA hooks; quantized/custom model
+patchers may not support them. Existing conditioning hooks and upstream LoRAs
+are preserved; this node cannot turn off a LoRA already applied upstream.
+No extra packages or frontend extension are needed.
+
+Test in ComfyUI: restart and refresh, add **mAI scheduled LoRA**, connect MODEL
+and both encoded prompts, select a compatible LoRA, then connect all outputs
+to KSampler. At a fixed seed compare the default curve with `0:0` (off),
+`0:1` (always on), and a fade-in curve. Chain nodes using all three connections
+to schedule several LoRAs. Automated tests:
+`python -m pytest tests/test_lora_schedule.py tests/test_scheduled_lora.py`.
+
 ## mAI conditional LoRA
 
 Location: `mAI / Utils`. Registered as `MAIConditionalLora`.
