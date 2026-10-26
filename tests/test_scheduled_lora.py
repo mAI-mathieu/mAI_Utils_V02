@@ -37,7 +37,9 @@ def native(monkeypatch):
 
 def test_all_zero_schedule_bypasses_dependencies_and_cloning():
     model, positive, negative = object(), object(), object()
-    assert MAIScheduledLora().run(model, positive, negative, "unused", "0:0,100:0", "linear") == (model, positive, negative)
+    result = MAIScheduledLora().run(model, positive, negative, "unused", "0:0,100:0", "linear")
+    assert result[:3] == (model, positive, negative)
+    assert "Step 1/20 | 0% | strength 0" in result[3]
 
 
 def test_invalid_schedule_and_mode_fail_before_loading(native):
@@ -59,6 +61,8 @@ def test_native_hooks_attach_to_both_prompts_and_preserve_model(native):
     native.hooks.create_hook_lora.assert_called_once_with(lora=native.utils.load_torch_file.return_value, strength_model=1.0, strength_clip=0.0)
     assert result[1] == [positive, native.hook]
     assert result[2] == [negative, native.hook]
+    assert result[3].startswith("LoRA: style\n")
+    assert "Step 6/20 | 25% | strength 0.5" in result[3]
     calls = native.hooks.set_hooks_for_conditioning.call_args_list
     assert calls[0].kwargs["cache"] is calls[1].kwargs["cache"]
     assert positive[0][1] == {"other": "positive"}
@@ -82,12 +86,30 @@ def test_missing_file_error_propagates(native):
 
 
 def test_schema_uses_installed_loras_and_outputs_match_sampler(native):
-    required = MAIScheduledLora.INPUT_TYPES()["required"]
+    schema = MAIScheduledLora.INPUT_TYPES()
+    required = schema["required"]
     assert required["lora_name"][0] == ["style.safetensors"]
     assert required["schedule"][1]["default"] == DEFAULT_LORA_SCHEDULE
     assert required["interpolation"][0] == ["linear", "constant"]
-    assert MAIScheduledLora.RETURN_TYPES == ("MODEL", "CONDITIONING", "CONDITIONING")
-    assert MAIScheduledLora.RETURN_NAMES == ("model", "positive", "negative")
+    assert schema["optional"]["report_steps"][1]["default"] == 20
+    assert MAIScheduledLora.RETURN_TYPES == ("MODEL", "CONDITIONING", "CONDITIONING", "STRING")
+    assert MAIScheduledLora.RETURN_NAMES == ("model", "positive", "negative", "schedule_text")
+
+
+def test_report_steps_changes_text_without_changing_hook_schedule(native):
+    node, model = MAIScheduledLora(), Mock()
+    first = node.run(model, [], [], "style", DEFAULT_LORA_SCHEDULE, "linear", report_steps=10)
+    second = node.run(model, [], [], "style", DEFAULT_LORA_SCHEDULE, "linear", report_steps=40)
+    assert "Step 2/10 | 10% | strength 1" in first[3]
+    assert "Step 11/40 | 25% | strength 0.5" in second[3]
+    calls = native.adapter.LoRAScheduleKeyframes.call_args_list
+    assert calls[0] == calls[1]
+    assert native.utils.load_torch_file.call_count == 1
+
+
+def test_invalid_report_steps_fail_even_for_bypass():
+    with pytest.raises(ValueError, match="report_steps"):
+        MAIScheduledLora().run(object(), [], [], "unused", "0:0", "linear", report_steps=0)
 
 
 @pytest.fixture

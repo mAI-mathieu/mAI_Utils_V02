@@ -1,21 +1,26 @@
 """Apply a configurable LoRA strength timeline during diffusion sampling."""
 
 if __package__ == "nodes":
-    from utils.lora_schedule import DEFAULT_LORA_SCHEDULE, parse_lora_schedule
+    from utils.lora_schedule import (
+        DEFAULT_LORA_SCHEDULE, format_lora_schedule_report, parse_lora_schedule,
+    )
 else:
-    from ..utils.lora_schedule import DEFAULT_LORA_SCHEDULE, parse_lora_schedule
+    from ..utils.lora_schedule import (
+        DEFAULT_LORA_SCHEDULE, format_lora_schedule_report, parse_lora_schedule,
+    )
 
 
 class MAIScheduledLora:
     CATEGORY = "mAI / Utils"
     FUNCTION = "run"
-    RETURN_TYPES = ("MODEL", "CONDITIONING", "CONDITIONING")
-    RETURN_NAMES = ("model", "positive", "negative")
+    RETURN_TYPES = ("MODEL", "CONDITIONING", "CONDITIONING", "STRING")
+    RETURN_NAMES = ("model", "positive", "negative", "schedule_text")
     DESCRIPTION = (
         "Controls diffusion-model LoRA strength throughout sampling. Enter one "
         "percent:strength point per line. Linear fades between points; constant "
-        "holds until the next point. Connect all three outputs to the sampler. "
-        "Percentages refer to the steps executed in each sampler run."
+        "holds until the next point. Connect model, positive and negative to the sampler. "
+        "Percentages refer to the steps executed in each sampler run. The schedule_text "
+        "output previews strength per step using report_steps; set it to the sampler's executed step count."
     )
 
     def __init__(self):
@@ -37,14 +42,22 @@ class MAIScheduledLora:
             "interpolation": (["linear", "constant"], {
                 "tooltip": "Linear fades between points. Constant holds each strength until the next point.",
             }),
+        }, "optional": {
+            "report_steps": ("INT", {
+                "default": 20, "min": 1, "max": 10000,
+                "tooltip": "Executed sampler steps used only for the schedule_text preview. Match the sampler's actual step count (after denoise/start/end trimming). Does not change sampling. Can share an INT input with the sampler's steps.",
+            }),
         }}
 
-    def run(self, model, positive, negative, lora_name, schedule, interpolation):
+    def run(self, model, positive, negative, lora_name, schedule, interpolation, report_steps=20):
         points = parse_lora_schedule(schedule)
         if interpolation not in ("linear", "constant"):
             raise ValueError(f"Unknown LoRA schedule interpolation: {interpolation}")
+        schedule_text = f"LoRA: {lora_name}\n" + format_lora_schedule_report(
+            points, interpolation, report_steps,
+        )
         if all(strength == 0 for _, strength in points):
-            return (model, positive, negative)
+            return (model, positive, negative, schedule_text)
 
         import comfy.hooks
         import comfy.utils
@@ -70,4 +83,4 @@ class MAIScheduledLora:
         cache = {}
         positive = comfy.hooks.set_hooks_for_conditioning(positive, hooks, cache=cache)
         negative = comfy.hooks.set_hooks_for_conditioning(negative, hooks, cache=cache)
-        return (patched_model, positive, negative)
+        return (patched_model, positive, negative, schedule_text)

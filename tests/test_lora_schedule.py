@@ -2,6 +2,7 @@ import pytest
 
 from utils.lora_schedule import (
     DEFAULT_LORA_SCHEDULE,
+    format_lora_schedule_report,
     parse_lora_schedule,
     schedule_strength,
     sigma_step_positions,
@@ -76,3 +77,45 @@ def test_invalid_sigma_schedules(sigmas):
 def test_nonfinite_sampling_sigma_is_rejected():
     with pytest.raises(ValueError, match="non-finite"):
         sigma_to_step_percent(float("nan"), (-1, 0))
+
+
+def test_report_uses_one_based_steps_and_excludes_terminal_boundary_from_step_rows():
+    report = format_lora_schedule_report(parse_lora_schedule(DEFAULT_LORA_SCHEDULE), "linear", 20)
+    rows = [line for line in report.splitlines() if line.startswith("Step ")]
+    assert len(rows) == 20
+    assert rows[0] == "Step 1/20 | 0% | strength 1"
+    assert rows[2] == "Step 3/20 | 10% | strength 1"
+    assert rows[5] == "Step 6/20 | 25% | strength 0.5"
+    assert rows[8] == "Step 9/20 | 40% | strength 0"
+    assert rows[-1] == "Step 20/20 | 95% | strength 0"
+    assert "End boundary | 100% | strength 0 (usually not evaluated)" in report
+    assert "not a runtime log" in report
+
+
+def test_report_matches_runtime_strength_at_nonlinear_sigma_boundaries():
+    points = parse_lora_schedule("0:-1, 50:1, 100:0")
+    sigmas = [100, 10, 1, 0.1, 0]
+    positions = sigma_step_positions(sigmas)
+    report = format_lora_schedule_report(points, "linear", 4)
+    rows = [line for line in report.splitlines() if line.startswith("Step ")]
+    for sigma, row in zip(sigmas[:-1], rows):
+        expected = schedule_strength(points, sigma_to_step_percent(sigma, positions))
+        assert float(row.rsplit(" ", 1)[1]) == pytest.approx(expected)
+
+
+def test_report_constant_mode_single_step_and_nonzero_terminal_value():
+    points = parse_lora_schedule("0:1, 50:-0.5, 100:2")
+    report = format_lora_schedule_report(points, "constant", 4)
+    assert "Step 2/4 | 25% | strength 1" in report
+    assert "Step 3/4 | 50% | strength -0.5" in report
+    assert "Step 4/4 | 75% | strength -0.5" in report
+    assert "End boundary | 100% | strength 2" in report
+    single = format_lora_schedule_report(points, "linear", 1)
+    assert "Step 1/1 | 0% | strength 1" in single
+    assert "Step 2/" not in single
+
+
+@pytest.mark.parametrize("steps", [0, -1, 10001, 2.5, True, "20", None])
+def test_report_rejects_invalid_step_counts(steps):
+    with pytest.raises(ValueError, match="report_steps"):
+        format_lora_schedule_report(((0, 1),), "linear", steps)

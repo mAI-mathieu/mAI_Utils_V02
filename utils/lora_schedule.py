@@ -48,6 +48,27 @@ def schedule_strength(points, percent, interpolation="linear"):
     return points[-1][1]
 
 
+def format_lora_schedule_report(points, interpolation, steps):
+    """Preview strength at each step start for a supplied executed step count."""
+    if isinstance(steps, bool) or not isinstance(steps, int) or not 1 <= steps <= 10000:
+        raise ValueError("LoRA report_steps must be an integer from 1 to 10000.")
+    lines = [
+        f"LoRA schedule preview: {steps} steps, {interpolation} interpolation",
+        "Set report_steps to the sampler's executed step count; this is not a runtime log.",
+        "Steps are numbered from 1; progress is measured at each step's start.",
+    ]
+    for index in range(steps):
+        percent = 100.0 * index / steps
+        strength = schedule_strength(points, percent, interpolation)
+        lines.append(
+            f"Step {index + 1}/{steps} | {percent:.6g}% | strength {strength:.8g}"
+        )
+    final_strength = schedule_strength(points, 100.0, interpolation)
+    lines.append(f"End boundary | 100% | strength {final_strength:.8g} (usually not evaluated)")
+    lines.append("Intermediate model evaluations may use interpolated strengths between these rows.")
+    return "\n".join(lines)
+
+
 def sigma_step_positions(sigmas):
     """Validate descending scheduler boundaries and prepare a binary search."""
     values = tuple(float(value) for value in sigmas)

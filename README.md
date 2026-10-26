@@ -652,10 +652,13 @@ Location: `mAI / Utils`. Registered as `MAIScheduledLora`.
 Changes a diffusion-model LoRA's strength during generation using an editable
 timeline. Inputs: `model` (MODEL), `positive` and `negative` (CONDITIONING),
 `lora_name` (installed LoRA dropdown), `schedule` (multiline STRING), and
-`interpolation` (`linear` by default, or `constant`). Outputs, in order:
-`model` (MODEL), `positive` (CONDITIONING), `negative` (CONDITIONING).
-Connect **all three outputs** to the sampler. Keep the original CLIP connected
-to your text encoders; this node schedules only the diffusion-model weights.
+`interpolation` (`linear` by default, or `constant`). Optional `report_steps`
+(INT, default 20, range 1–10000) sets the step count for the text preview only.
+Missing `report_steps` uses 20, including in older saved workflows.
+Outputs, in order: `model` (MODEL), `positive` (CONDITIONING),
+`negative` (CONDITIONING), `schedule_text` (STRING).
+Connect **model, positive and negative** to the sampler. Keep the original CLIP
+connected to your text encoders; this node schedules only the diffusion-model weights.
 
 Enter `percent:strength` points, one per line or separated by commas.
 Percentages use **0–100**, must increase, and cannot repeat. Strengths can be
@@ -678,6 +681,17 @@ stays off. To fade in and out, try `0:0, 20:1, 60:1, 100:0`. For abrupt changes,
 select `constant`. Configure the timeline before queuing; this is not a live
 slider for changing a running job.
 
+Connect `schedule_text` to a text display node to see strength at every step's
+start. Set `report_steps` to the sampler's **executed** step count; for a standard
+KSampler, share an INT value with its `steps` input. For truncated/custom
+schedules, use the number of intervals actually executed. The report is a preview produced before
+sampling, not a runtime log, and changing `report_steps` does not change sampling.
+Rows use step numbers starting at 1. With 20 steps, the default includes
+`Step 3/20 | 10% | strength 1`, `Step 6/20 | 25% | strength 0.5`, and
+`Step 9/20 | 40% | strength 0`. The 100% endpoint is listed separately, since
+it is usually not evaluated. Intermediate model evaluations can use strengths
+between the listed rows.
+
 Progress follows the **actual sigma intervals of the current sampler run**,
 not the model's training timestep percentages. With 20 steps, indices 0 and 2
 are 0% and 10%; index 8 is 40%. Each step starts at index / step count, so a
@@ -694,8 +708,10 @@ are preserved; this node cannot turn off a LoRA already applied upstream.
 No extra packages or frontend extension are needed.
 
 Test in ComfyUI: restart and refresh, add **mAI scheduled LoRA**, connect MODEL
-and both encoded prompts, select a compatible LoRA, then connect all outputs
-to KSampler. At a fixed seed compare the default curve with `0:0` (off),
+and both encoded prompts, select a compatible LoRA, then connect the first three
+outputs to KSampler. Connect the appended `schedule_text` output to a text display and
+match `report_steps` to KSampler's executed step count; check the rows above.
+At a fixed seed compare the default curve with `0:0` (off),
 `0:1` (always on), and a fade-in curve. Chain nodes using all three connections
 to schedule several LoRAs. Automated tests:
 `python -m pytest tests/test_lora_schedule.py tests/test_scheduled_lora.py`.
