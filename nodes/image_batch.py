@@ -13,8 +13,9 @@ class MAIImageBatch:
     RETURN_NAMES = ("image",)
     DESCRIPTION = (
         "Batches available images in socket order, skipping unconnected inputs and "
-        "None from disabled mAI image gates. Images must share dimensions, channels, "
-        "dtype and device. Outputs None when no images are available."
+        "None from disabled mAI image gates. Later images are resized to the first "
+        "available image's width and height. Images must share channels, dtype and "
+        "device. Outputs None when no images are available."
     )
 
     @classmethod

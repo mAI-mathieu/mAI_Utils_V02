@@ -2,8 +2,9 @@
 
 
 def batch_connected_images(images):
-    """Skip None, preserve input order, and return None when all inputs are missing."""
+    """Skip None and resize later batches to the first available image's size."""
     import torch
+    import torch.nn.functional as functional
 
     batches = []
     for index, image in enumerate(images, start=1):
@@ -19,15 +20,27 @@ def batch_connected_images(images):
             raise ValueError(f"image_{index} must be a floating-point grayscale, RGB or RGBA image.")
         if batches:
             first = batches[0]
-            if image.shape[1:] != first.shape[1:]:
+            if image.shape[-1] != first.shape[-1]:
                 raise ValueError(
-                    f"image_{index} must match the first available image's height, width and channels. "
-                    "Resize or convert images before batching."
+                    f"image_{index} must match the first available image's channels. "
+                    "Convert images to the same color format before batching."
                 )
             if image.dtype != first.dtype or image.device != first.device:
                 raise ValueError(
                     f"image_{index} must match the first available image's tensor dtype and device."
                 )
+            if image.shape[1:3] != first.shape[1:3]:
+                # Interpolation operates on BCHW; ComfyUI IMAGE uses BHWC.
+                # Compute low-precision inputs in float32 for CPU compatibility.
+                samples = image.movedim(-1, 1)
+                if image.dtype in (torch.float16, torch.bfloat16):
+                    samples = samples.float()
+                image = functional.interpolate(
+                    samples,
+                    size=first.shape[1:3],
+                    mode="bilinear",
+                    align_corners=False,
+                ).movedim(1, -1).to(dtype=first.dtype)
         batches.append(image)
 
     if not batches:

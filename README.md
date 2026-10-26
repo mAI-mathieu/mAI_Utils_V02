@@ -632,18 +632,23 @@ Each input can already contain a batch; all its frames are retained in order.
 A single available input passes through unchanged without copying.
 There are no required inputs, placeholder images, or extra dependencies.
 
-All available inputs must share height, width, channels, tensor dtype and device.
-Resize or convert images before batching if needed; this node does not resize
-them automatically. With no available images, the output is `None`, matching
+The first available image in socket order sets the output width and height.
+Later inputs with different dimensions are automatically resized with bilinear
+interpolation, stretching to that exact size without cropping or padding.
+The reference image and same-size inputs are not resampled. Disabled gates and
+unconnected sockets never determine the reference size. Inputs must still share
+channels, tensor dtype and device; convert color formats before batching if needed.
+With no available images, the output is `None`, matching
 the image gate's missing-image behavior. Only connect that empty output to
 nodes that accept `None`; Preview Image and Save Image need at least one image.
 Chain batch nodes to combine more than eight sources.
 
 Test in ComfyUI: restart, add **mAI image batch**, connect Load Image to
 `image_2`, and leave the other sockets empty. Connect the output to Preview
-Image and queue: only that image should appear. Connect another same-size image
+Image and queue: only that image should appear. Connect another different-size image
 through **mAI image gate** to `image_5`: enabled adds it to the batch, disabled
-removes it. Toggle back on, test an existing multi-image batch, and save/reload
+removes it. Its size should match the first image. Toggle back on, test an
+existing multi-image batch, and save/reload
 the workflow. To test all inputs missing, use a downstream node accepting `None`.
 Automated tests: `python -m pytest tests/test_image_batch.py tests/test_image_gate.py`.
 

@@ -68,15 +68,66 @@ def test_invalid_values_have_useful_errors(image, message, error):
 
 
 @pytest.mark.parametrize("image,message", [
-    (torch.zeros(1, 4, 3, 3), "height, width and channels"),
-    (torch.zeros(1, 2, 4, 3), "height, width and channels"),
-    (torch.zeros(1, 2, 3, 4), "height, width and channels"),
+    (torch.zeros(1, 2, 3, 4), "channels"),
     (torch.zeros(1, 2, 3, 3, dtype=torch.float64), "dtype and device"),
     (torch.empty(1, 2, 3, 3, device="meta"), "dtype and device"),
 ])
 def test_incompatible_inputs_fail_clearly(image, message):
     with pytest.raises(ValueError, match=message):
         batch_connected_images([torch.zeros(1, 2, 3, 3), None, image])
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32, torch.float64])
+def test_resize_matches_first_available_image_and_preserves_every_frame(dtype):
+    first = torch.full((1, 3, 3, 3), 0.25, dtype=dtype)
+    pattern = torch.tensor([[0.0, 0.25], [0.5, 0.75]], dtype=dtype)
+    second = pattern.reshape(1, 2, 2, 1).expand(2, 2, 2, 3)
+    original = second.clone()
+    result, = MAIImageBatch().run(image_2=first, image_6=second)
+    expected = torch.tensor([
+        [0.0, 0.125, 0.25],
+        [0.25, 0.375, 0.5],
+        [0.5, 0.625, 0.75],
+    ], dtype=dtype).reshape(1, 3, 3, 1).expand(2, 3, 3, 3)
+    assert result.shape == (3, 3, 3, 3)
+    assert result.dtype == dtype and result.device == first.device
+    torch.testing.assert_close(result[:1], first)
+    torch.testing.assert_close(result[1:], expected)
+    torch.testing.assert_close(second, original)
+
+
+def test_downsize_stretches_to_reference_without_cropping():
+    first = torch.zeros(1, 2, 3, 1)
+    second = torch.arange(24, dtype=torch.float32).reshape(1, 4, 6, 1) / 24
+    result, = MAIImageBatch().run(image_1=first, image_8=second)
+    expected = torch.tensor([[3.5, 5.5, 7.5], [15.5, 17.5, 19.5]]) / 24
+    assert result.shape == (2, 2, 3, 1)
+    torch.testing.assert_close(result[1, ..., 0], expected)
+
+
+def test_gate_toggle_changes_reference_to_first_remaining_image():
+    gate = MAIImageGate()
+    first = torch.zeros(1, 3, 5, 3)
+    second = torch.ones(2, 7, 2, 3)
+    batch = MAIImageBatch()
+    for enabled in (True, False, True):
+        result, = batch.run(image_1=gate.run(enabled, first)[0], image_4=second)
+        if enabled:
+            assert result.shape == (3, 3, 5, 3)
+            torch.testing.assert_close(result[:1], first)
+            torch.testing.assert_close(result[1:], torch.ones(2, 3, 5, 3))
+        else:
+            assert result is second
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")
+def test_resize_on_cuda_keeps_images_on_their_device():
+    first = torch.zeros(1, 3, 5, 4, device="cuda", dtype=torch.float16)
+    second = torch.ones(2, 7, 2, 4, device="cuda", dtype=torch.float16)
+    result, = MAIImageBatch().run(image_1=first, image_2=second)
+    assert result.shape == (3, 3, 5, 4)
+    assert result.device == first.device and result.dtype == first.dtype
+    torch.testing.assert_close(result[1:], torch.ones_like(result[1:]))
 
 
 def test_node_contract_and_pack_registration_preserve_existing_nodes(monkeypatch):
