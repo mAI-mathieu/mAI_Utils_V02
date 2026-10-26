@@ -5,6 +5,41 @@ ComfyUI custom node pack for small, reusable mAI utility nodes.
 Install this folder under ComfyUI's `custom_nodes` directory, then restart ComfyUI.
 The currently registered nodes are listed below.
 
+## mAI mask fill
+
+Location: `mAI / Image`. Registered as `MAIMaskFill`.
+Takes `image` (IMAGE) and `mask` (MASK) and returns one `image` (IMAGE).
+White mask pixels are filled; black pixels remain exactly unchanged. Soft mask
+values blend the fill with the original image. Mask values are clamped to 0–1.
+
+Settings:
+
+* `method`: `color` (default), `telea`, or `navier_stokes`.
+* `color`: hexadecimal `#RRGGBB`, default `#000000`; only used by `color`.
+* `inpaint_radius`: neighborhood radius in pixels, default 3.0; only used by
+  Telea and Navier–Stokes, which reconstruct the area from surrounding pixels.
+
+Supports floating RGB/RGBA images `[B,H,W,C]` and masks `[H,W]` or `[B,H,W]`
+at the same resolution. A single image or mask broadcasts over the other batch;
+other batch mismatches raise an error. Output keeps resolution, floating dtype,
+device and alpha. An empty mask returns an unchanged copy. Fully masked images
+work with color fill; inpainting requires some unmasked source pixels per image.
+
+Telea/Navier–Stokes use CPU OpenCV and quantize their working RGB image to
+8 bits; unmasked output pixels retain their original precision. These methods
+are best for small holes/scratches and can smear large missing areas. They do
+not generate new scene content. Color mode uses PyTorch and needs no OpenCV.
+If OpenCV is missing, install `opencv-python-headless` with the ComfyUI Python
+environment's `python -m pip install opencv-python-headless`, then restart.
+An existing OpenCV installation providing `cv2.inpaint` is sufficient.
+
+Test in ComfyUI: restart, refresh the browser, add **mAI mask fill**, connect a
+source image and a same-size mask, then connect `image` to **Preview Image**.
+Try `color` with `#FF0000`, then `telea` and `navier_stokes` on a small white
+mask region; verify black mask areas stay unchanged. Save/reload the workflow.
+Automated tests: `python -m pytest tests/test_mask_fill.py` in an environment
+with PyTorch; OpenCV-specific tests skip if OpenCV is missing.
+
 ## mAI int to nearest multiple
 
 Location: `mAI / Utils`. Registered as `MAIIntToNearestMultiple`.

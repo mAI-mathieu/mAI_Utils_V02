@@ -16,6 +16,7 @@ from .nodes.int_to_nearest_multiple import MAIIntToNearestMultiple
 from .nodes.json_parser import MAIJsonParser
 from .nodes.krea2_image_conditioning import MAIKrea2ImageConditioning
 from .nodes.mask_bounding_box import MAIMaskBoundingBox
+from .nodes.mask_fill import MAIMaskFill
 from .nodes.mask_outline import MAIMaskOutline
 from .nodes.mask_smart_crop import MAIMaskSmartCrop
 from .nodes.mask_smart_stitch import MAIMaskSmartStitch
@@ -64,6 +65,7 @@ NODE_CLASS_MAPPINGS = {
     "MAIJsonParser": MAIJsonParser,
     "MAIKrea2ImageConditioning": MAIKrea2ImageConditioning,
     "MAIMaskBoundingBox": MAIMaskBoundingBox,
+    "MAIMaskFill": MAIMaskFill,
     "MAIMaskOutline": MAIMaskOutline,
     "MAIMaskSmartCrop": MAIMaskSmartCrop,
     "MAIMaskSmartStitch": MAIMaskSmartStitch,
@@ -95,6 +97,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MAIJsonParser": "mAI JSON parser",
     "MAIKrea2ImageConditioning": "mAI Krea2 image conditioning",
     "MAIMaskBoundingBox": "mAI mask bounding box",
+    "MAIMaskFill": "mAI mask fill",
     "MAIMaskOutline": "mAI mask outline",
     "MAIMaskSmartCrop": "mAI Mask Smart Crop",
     "MAIMaskSmartStitch": "mAI Mask Smart Stitch",
