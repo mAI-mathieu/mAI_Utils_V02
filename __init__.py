@@ -9,6 +9,7 @@ from .nodes.frame_loop_fade import MAIFrameLoopFade
 from .nodes.gpu_video_combine import MAIGPUVideoCombine
 from .nodes.h3_to_ltx_frame_adapter import MAIH3ToLTXFrameAdapter
 from .nodes.image_aspect_ratio import MAIImageAspectRatio
+from .nodes.image_batch import MAIImageBatch
 from .nodes.image_blur import MAIImageBlur
 from .nodes.image_composite_masked import MAIImageCompositeMasked
 from .nodes.image_gate import MAIImageGate
@@ -60,6 +61,7 @@ NODE_CLASS_MAPPINGS = {
     "MAIGPUVideoCombine": MAIGPUVideoCombine,
     "MAIH3ToLTXFrameAdapter": MAIH3ToLTXFrameAdapter,
     "MAIImageAspectRatio": MAIImageAspectRatio,
+    "MAIImageBatch": MAIImageBatch,
     "MAIImageBlur": MAIImageBlur,
     "MAIImageCompositeMasked": MAIImageCompositeMasked,
     "MAIImageGate": MAIImageGate,
@@ -94,6 +96,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MAIGPUVideoCombine": "mAI GPU Video Combine",
     "MAIH3ToLTXFrameAdapter": "mAI H3 to LTX Frame Adapter",
     "MAIImageAspectRatio": "mAI image aspect ratio",
+    "MAIImageBatch": "mAI image batch",
     "MAIImageBlur": "mAI image blur",
     "MAIImageCompositeMasked": "mAI image composite masked",
     "MAIImageGate": "mAI image gate",
