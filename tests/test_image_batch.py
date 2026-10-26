@@ -7,7 +7,7 @@ import torch
 
 from nodes.image_batch import MAIImageBatch
 from nodes.image_gate import MAIImageGate
-from utils.image_batch import batch_connected_images
+from utils.image_batch import RESIZE_METHODS, batch_connected_images
 
 
 def test_missing_inputs_and_disabled_gates_produce_none():
@@ -121,13 +121,88 @@ def test_gate_toggle_changes_reference_to_first_remaining_image():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")
-def test_resize_on_cuda_keeps_images_on_their_device():
+@pytest.mark.parametrize("resize_method", RESIZE_METHODS)
+def test_resize_on_cuda_keeps_images_on_their_device(resize_method):
     first = torch.zeros(1, 3, 5, 4, device="cuda", dtype=torch.float16)
     second = torch.ones(2, 7, 2, 4, device="cuda", dtype=torch.float16)
-    result, = MAIImageBatch().run(image_1=first, image_2=second)
+    result, = MAIImageBatch().run(image_1=first, image_2=second, resize_method=resize_method)
     assert result.shape == (3, 3, 5, 4)
     assert result.device == first.device and result.dtype == first.dtype
-    torch.testing.assert_close(result[1:], torch.ones_like(result[1:]))
+    expected = batch_connected_images([first.cpu(), second.cpu()], resize_method)
+    torch.testing.assert_close(result.cpu(), expected)
+
+
+@pytest.mark.parametrize("portrait", [False, True])
+def test_preserve_ratio_crop_keeps_center_and_removes_excess(portrait):
+    first = torch.zeros(1, 2, 2, 1)
+    second = torch.arange(8, dtype=torch.float32).reshape(1, 2, 4, 1)
+    if portrait:
+        second = second.transpose(1, 2)
+    original = second.clone()
+    result, = MAIImageBatch().run(image_2=first, image_7=second, resize_method="preserve ratio crop")
+    expected = second[:, 1:3] if portrait else second[:, :, 1:3]
+    torch.testing.assert_close(result[1:], expected)
+    torch.testing.assert_close(second, original)
+
+
+@pytest.mark.parametrize("portrait", [False, True])
+def test_preserve_ratio_pad_preserves_full_image_and_centers_black_borders(portrait):
+    first = torch.zeros(1, 6, 6, 3)
+    second = torch.full((2, 2, 6, 3), 0.75)
+    expected = torch.zeros(2, 6, 6, 3)
+    expected[:, 2:4] = 0.75
+    if portrait:
+        second = second.transpose(1, 2)
+        expected = expected.transpose(1, 2)
+    result, = MAIImageBatch().run(image_1=first, image_8=second, resize_method="preserve ratio pad")
+    torch.testing.assert_close(result[1:], expected)
+
+
+@pytest.mark.parametrize("resize_method", RESIZE_METHODS)
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32, torch.float64])
+def test_methods_scale_to_exact_size_with_odd_dimensions_and_keep_dtype(resize_method, dtype):
+    first = torch.zeros(1, 5, 5, 4, dtype=dtype)
+    second = torch.ones(2, 2, 4, 4, dtype=dtype)
+    result, = MAIImageBatch().run(image_2=first, image_8=second, resize_method=resize_method)
+    assert result.shape == (3, 5, 5, 4) and result.dtype == dtype
+    torch.testing.assert_close(result[:1], first)
+    expected = torch.ones(2, 5, 5, 4, dtype=dtype)
+    if resize_method == "preserve ratio pad":
+        expected[:, :1] = 0
+        expected[:, 3:] = 0
+    torch.testing.assert_close(result[1:], expected)
+
+
+@pytest.mark.parametrize("resize_method", RESIZE_METHODS)
+def test_methods_skip_empty_gates_and_keep_single_image_identity(resize_method):
+    image = torch.rand(1, 2, 4, 3)
+    batch = MAIImageBatch()
+    assert batch.run(resize_method=resize_method) == (None,)
+    assert batch.run(image_1=MAIImageGate().run(False)[0], image_4=image,
+                     resize_method=resize_method)[0] is image
+
+
+def test_preserve_ratio_crop_scales_before_cropping():
+    first = torch.zeros(1, 4, 4, 1)
+    # Doubling the image produces a 4x8 image; the center 4 columns are retained.
+    second = torch.tensor([0.0, 0.25, 0.5, 0.75]).reshape(1, 1, 4, 1).expand(1, 2, 4, 1)
+    result = batch_connected_images([first, second], "preserve ratio crop")
+    row = torch.tensor([0.1875, 0.3125, 0.4375, 0.5625])
+    torch.testing.assert_close(result[1, ..., 0], row.expand(4, 4))
+
+
+def test_preserve_ratio_pad_scales_before_padding():
+    first = torch.zeros(1, 4, 4, 1)
+    second = torch.tensor([0.0, 0.5]).reshape(1, 1, 2, 1)
+    result = batch_connected_images([first, second], "preserve ratio pad")
+    expected = torch.zeros(4, 4)
+    expected[1:3] = torch.tensor([0.0, 0.125, 0.375, 0.5])
+    torch.testing.assert_close(result[1, ..., 0], expected)
+
+
+def test_unknown_resize_method_has_useful_error_even_with_no_images():
+    with pytest.raises(ValueError, match="Unknown batch resize method"):
+        batch_connected_images([], "invalid")
 
 
 def test_node_contract_and_pack_registration_preserve_existing_nodes(monkeypatch):
@@ -136,8 +211,11 @@ def test_node_contract_and_pack_registration_preserve_existing_nodes(monkeypatch
     assert MAIImageBatch.RETURN_NAMES == ("image",)
     inputs = MAIImageBatch.INPUT_TYPES()
     assert inputs["required"] == {}
-    assert list(inputs["optional"]) == [f"image_{number}" for number in range(1, 9)]
-    assert all(spec[0] == "IMAGE" for spec in inputs["optional"].values())
+    assert list(inputs["optional"]) == [f"image_{number}" for number in range(1, 9)] + ["resize_method"]
+    assert all(inputs["optional"][f"image_{number}"][0] == "IMAGE" for number in range(1, 9))
+    methods, settings = inputs["optional"]["resize_method"]
+    assert methods == ["stretch", "preserve ratio crop", "preserve ratio pad"]
+    assert settings["default"] == "stretch"
     root = Path(__file__).resolve().parents[1]
     spec = importlib.util.spec_from_file_location(
         "test_mai_image_batch_pack", root / "__init__.py", submodule_search_locations=[str(root)],

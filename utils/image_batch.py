@@ -1,10 +1,14 @@
 """Combine optional ComfyUI IMAGE tensors without inventing missing images."""
 
+RESIZE_METHODS = ("stretch", "preserve ratio crop", "preserve ratio pad")
 
-def batch_connected_images(images):
+
+def batch_connected_images(images, resize_method="stretch"):
     """Skip None and resize later batches to the first available image's size."""
     import torch
-    import torch.nn.functional as functional
+
+    if resize_method not in RESIZE_METHODS:
+        raise ValueError(f"Unknown batch resize method: {resize_method}")
 
     batches = []
     for index, image in enumerate(images, start=1):
@@ -30,19 +34,54 @@ def batch_connected_images(images):
                     f"image_{index} must match the first available image's tensor dtype and device."
                 )
             if image.shape[1:3] != first.shape[1:3]:
-                # Interpolation operates on BCHW; ComfyUI IMAGE uses BHWC.
-                # Compute low-precision inputs in float32 for CPU compatibility.
-                samples = image.movedim(-1, 1)
-                if image.dtype in (torch.float16, torch.bfloat16):
-                    samples = samples.float()
-                image = functional.interpolate(
-                    samples,
-                    size=first.shape[1:3],
-                    mode="bilinear",
-                    align_corners=False,
-                ).movedim(1, -1).to(dtype=first.dtype)
+                image = _resize_image(image, first.shape[1:3], resize_method)
         batches.append(image)
 
     if not batches:
         return None
     return batches[0] if len(batches) == 1 else torch.cat(batches, dim=0)
+
+
+def _resize_image(image, target_size, resize_method):
+    """Bilinear stretch, centered cover crop, or centered contain padding."""
+    import torch
+    import torch.nn.functional as functional
+
+    target_height, target_width = target_size
+    height, width = image.shape[1:3]
+    resized_height, resized_width = target_size
+    if resize_method == "preserve ratio crop":
+        # Round the covering dimension upward so the crop always fills the target.
+        if target_height * width >= target_width * height:
+            resized_width = (width * target_height + height - 1) // height
+        else:
+            resized_height = (height * target_width + width - 1) // width
+    elif resize_method == "preserve ratio pad":
+        # Round the contained dimension downward so it never exceeds the target.
+        if target_height * width >= target_width * height:
+            resized_height = max(1, height * target_width // width)
+        else:
+            resized_width = max(1, width * target_height // height)
+
+    # Interpolation operates on BCHW; ComfyUI IMAGE uses BHWC.
+    samples = image.movedim(-1, 1)
+    if (height, width) != (resized_height, resized_width):
+        if image.dtype in (torch.float16, torch.bfloat16):
+            samples = samples.float()
+        samples = functional.interpolate(
+            samples, size=(resized_height, resized_width),
+            mode="bilinear", align_corners=False,
+        )
+
+    if resize_method == "preserve ratio crop":
+        top = (resized_height - target_height) // 2
+        left = (resized_width - target_width) // 2
+        samples = samples[:, :, top:top + target_height, left:left + target_width]
+    elif resize_method == "preserve ratio pad":
+        vertical = target_height - resized_height
+        horizontal = target_width - resized_width
+        samples = functional.pad(samples, (
+            horizontal // 2, horizontal - horizontal // 2,
+            vertical // 2, vertical - vertical // 2,
+        ), value=0.0)
+    return samples.movedim(1, -1).to(dtype=image.dtype)

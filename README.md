@@ -625,7 +625,8 @@ not ComfyUI batches. Automated tests: `python -m pytest tests/test_json_parser.p
 
 Location: `mAI / Image`. Registered as `MAIImageBatch`.
 
-Inputs: eight optional IMAGE sockets, `image_1` through `image_8`.
+Inputs: eight optional IMAGE sockets, `image_1` through `image_8`, and an optional
+`resize_method` dropdown (default `stretch`, including older saved workflows).
 Output: `image` (IMAGE). Combines only available images in socket order;
 unconnected inputs and `None` from disabled **mAI image gate** nodes are skipped.
 Each input can already contain a batch; all its frames are retained in order.
@@ -633,8 +634,16 @@ A single available input passes through unchanged without copying.
 There are no required inputs, placeholder images, or extra dependencies.
 
 The first available image in socket order sets the output width and height.
-Later inputs with different dimensions are automatically resized with bilinear
-interpolation, stretching to that exact size without cropping or padding.
+Later inputs with different dimensions are resized with bilinear interpolation:
+
+* `stretch`: resize directly to the reference width and height.
+* `preserve ratio crop`: scale to cover the reference, then center-crop the excess.
+* `preserve ratio pad`: scale to fit inside the reference, then center-pad with black.
+
+All methods output the exact reference dimensions. Aspect ratio modes round to
+whole pixels; odd crop/padding differences put the extra pixel on the bottom/right.
+RGBA padding is transparent black (alpha zero). Crop can remove image content;
+pad adds borders. No extra dependency is required.
 The reference image and same-size inputs are not resampled. Disabled gates and
 unconnected sockets never determine the reference size. Inputs must still share
 channels, tensor dtype and device; convert color formats before batching if needed.
@@ -647,7 +656,8 @@ Test in ComfyUI: restart, add **mAI image batch**, connect Load Image to
 `image_2`, and leave the other sockets empty. Connect the output to Preview
 Image and queue: only that image should appear. Connect another different-size image
 through **mAI image gate** to `image_5`: enabled adds it to the batch, disabled
-removes it. Its size should match the first image. Toggle back on, test an
+removes it. Its size should match the first image. Compare all three resize
+methods using pictures with different aspect ratios. Toggle back on, test an
 existing multi-image batch, and save/reload
 the workflow. To test all inputs missing, use a downstream node accepting `None`.
 Automated tests: `python -m pytest tests/test_image_batch.py tests/test_image_gate.py`.
