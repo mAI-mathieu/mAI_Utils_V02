@@ -90,7 +90,7 @@ def test_schema_uses_installed_loras_and_outputs_match_sampler(native):
     required = schema["required"]
     assert required["lora_name"][0] == ["style.safetensors"]
     assert required["schedule"][1]["default"] == DEFAULT_LORA_SCHEDULE
-    assert required["interpolation"][0] == ["linear", "constant"]
+    assert required["interpolation"][0] == ["linear", "constant", "ease_in", "ease_out", "ease_in_out"]
     assert schema["optional"]["report_steps"][1]["default"] == 20
     assert MAIScheduledLora.RETURN_TYPES == ("MODEL", "CONDITIONING", "CONDITIONING", "STRING")
     assert MAIScheduledLora.RETURN_NAMES == ("model", "positive", "negative", "schedule_text")
@@ -110,6 +110,15 @@ def test_report_steps_changes_text_without_changing_hook_schedule(native):
 def test_invalid_report_steps_fail_even_for_bypass():
     with pytest.raises(ValueError, match="report_steps"):
         MAIScheduledLora().run(object(), [], [], "unused", "0:0", "linear", report_steps=0)
+
+
+@pytest.mark.parametrize(("mode", "mid_strength"), [
+    ("ease_in", 0.75), ("ease_out", 0.25), ("ease_in_out", 0.5),
+])
+def test_node_passes_easing_to_hooks_and_reports_the_same_curve(native, mode, mid_strength):
+    result = MAIScheduledLora().run(Mock(), [], [], "style", DEFAULT_LORA_SCHEDULE, mode)
+    assert native.adapter.LoRAScheduleKeyframes.call_args.args[1] == mode
+    assert f"Step 6/20 | 25% | strength {mid_strength}" in result[3]
 
 
 @pytest.fixture
@@ -183,6 +192,21 @@ def test_adapter_constant_boundaries_and_missing_sampler_schedule(keyframes_type
     assert curve.strength == 0
     with pytest.raises(ValueError, match="sample_sigmas"):
         curve.prepare_current_keyframe(0, {})
+
+
+@pytest.mark.parametrize(("mode", "expected"), [
+    ("ease_in", 0.75), ("ease_out", 0.25), ("ease_in_out", 0.5),
+])
+def test_adapter_eases_strength_and_retains_mode_when_cloned(keyframes_type, mode, expected):
+    curve = keyframes_type(((0, 1), (10, 1), (40, 0), (100, 0)), mode)
+    options = {"sample_sigmas": SamplerSigmas(range(20, -1, -1))}
+    assert curve.prepare_current_keyframe(15, options)
+    assert curve.strength == pytest.approx(expected)
+    assert not curve.prepare_current_keyframe(15, options)
+    clone = curve.clone()
+    assert clone.interpolation == mode
+    assert clone.prepare_current_keyframe(15, options)
+    assert clone.strength == pytest.approx(expected)
 
 
 def test_pack_registration_preserves_existing_nodes():

@@ -2,6 +2,7 @@ import pytest
 
 from utils.lora_schedule import (
     DEFAULT_LORA_SCHEDULE,
+    INTERPOLATION_METHODS,
     format_lora_schedule_report,
     parse_lora_schedule,
     schedule_strength,
@@ -50,6 +51,41 @@ def test_constant_switches_at_exact_points_and_single_point_holds():
         schedule_strength(points, 0, "unknown")
 
 
+@pytest.mark.parametrize(("mode", "expected"), [
+    ("linear", (0.25, 0.5, 0.75)),
+    ("ease_in", (0.0625, 0.25, 0.5625)),
+    ("ease_out", (0.4375, 0.75, 0.9375)),
+    ("ease_in_out", (0.125, 0.5, 0.875)),
+])
+def test_easing_reference_values_in_both_directions(mode, expected):
+    rising = ((0, 0), (100, 1))
+    falling = ((0, 1), (100, 0))
+    for percent, strength in zip((25, 50, 75), expected):
+        assert schedule_strength(rising, percent, mode) == pytest.approx(strength)
+        assert schedule_strength(falling, percent, mode) == pytest.approx(1 - strength)
+
+
+@pytest.mark.parametrize("mode", INTERPOLATION_METHODS)
+def test_all_modes_preserve_endpoints_and_holds_without_overshoot(mode):
+    points = ((10, -2), (30, 2), (60, 2), (90, -1))
+    for percent, expected in [(0, -2), (10, -2), (30, 2), (45, 2), (60, 2), (90, -1), (100, -1)]:
+        assert schedule_strength(points, percent, mode) == expected
+    rising = [schedule_strength(points, percent, mode) for percent in range(10, 31)]
+    falling = [schedule_strength(points, percent, mode) for percent in range(60, 91)]
+    assert rising == sorted(rising)
+    assert falling == sorted(falling, reverse=True)
+    assert min(rising) == -2 and max(rising) == 2
+    assert min(falling) == -1 and max(falling) == 2
+    assert schedule_strength(((25, 0.7),), 50, mode) == 0.7
+
+
+def test_easing_restarts_at_each_segment():
+    points = ((0, 0), (20, 1), (100, -1))
+    # Halfway through each segment is 25% of the strength change for ease_in.
+    assert schedule_strength(points, 10, "ease_in") == pytest.approx(0.25)
+    assert schedule_strength(points, 60, "ease_in") == pytest.approx(0.5)
+
+
 def test_progress_uses_step_intervals_instead_of_noise_percentage():
     positions = sigma_step_positions([100, 10, 1, 0.1, 0])
     assert [sigma_to_step_percent(s, positions) for s in [100, 10, 1, 0.1, 0]] == [0, 25, 50, 75, 100]
@@ -94,15 +130,17 @@ def test_report_uses_one_based_steps_and_excludes_terminal_boundary_from_step_ro
     assert "not a runtime log" in report
 
 
-def test_report_matches_runtime_strength_at_nonlinear_sigma_boundaries():
+@pytest.mark.parametrize("mode", INTERPOLATION_METHODS)
+def test_report_matches_runtime_strength_at_nonlinear_sigma_boundaries(mode):
     points = parse_lora_schedule("0:-1, 50:1, 100:0")
     sigmas = [100, 10, 1, 0.1, 0]
     positions = sigma_step_positions(sigmas)
-    report = format_lora_schedule_report(points, "linear", 4)
+    report = format_lora_schedule_report(points, mode, 4)
     rows = [line for line in report.splitlines() if line.startswith("Step ")]
     for sigma, row in zip(sigmas[:-1], rows):
-        expected = schedule_strength(points, sigma_to_step_percent(sigma, positions))
+        expected = schedule_strength(points, sigma_to_step_percent(sigma, positions), mode)
         assert float(row.rsplit(" ", 1)[1]) == pytest.approx(expected)
+    assert f"{mode} interpolation" in report
 
 
 def test_report_constant_mode_single_step_and_nonzero_terminal_value():

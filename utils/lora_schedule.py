@@ -5,6 +5,7 @@ import math
 
 
 DEFAULT_LORA_SCHEDULE = "0%:1\n10%:1\n40%:0\n100%:0"
+INTERPOLATION_METHODS = ("linear", "constant", "ease_in", "ease_out", "ease_in_out")
 
 
 def parse_lora_schedule(text):
@@ -36,7 +37,7 @@ def parse_lora_schedule(text):
 
 def schedule_strength(points, percent, interpolation="linear"):
     """Extend endpoint values and interpolate between neighboring points."""
-    if interpolation not in ("linear", "constant"):
+    if interpolation not in INTERPOLATION_METHODS:
         raise ValueError(f"Unknown LoRA schedule interpolation: {interpolation}")
     if percent <= points[0][0]:
         return points[0][1]
@@ -44,7 +45,19 @@ def schedule_strength(points, percent, interpolation="linear"):
         if percent < end:
             if interpolation == "constant":
                 return first
-            return first + (last - first) * (percent - start) / (end - start)
+            fraction = (percent - start) / (end - start)
+            # Quadratic easing changes transition speed in either direction;
+            # the same curve is used for sampling and the text preview.
+            if interpolation == "ease_in":
+                fraction = fraction * fraction
+            elif interpolation == "ease_out":
+                fraction = 1 - (1 - fraction) ** 2
+            elif interpolation == "ease_in_out":
+                if fraction < 0.5:
+                    fraction = 2 * fraction * fraction
+                else:
+                    fraction = 1 - 2 * (1 - fraction) ** 2
+            return first + (last - first) * fraction
     return points[-1][1]
 
 

@@ -652,7 +652,8 @@ Location: `mAI / Utils`. Registered as `MAIScheduledLora`.
 Changes a diffusion-model LoRA's strength during generation using an editable
 timeline. Inputs: `model` (MODEL), `positive` and `negative` (CONDITIONING),
 `lora_name` (installed LoRA dropdown), `schedule` (multiline STRING), and
-`interpolation` (`linear` by default, or `constant`). Optional `report_steps`
+`interpolation` (`linear` by default, `constant`, `ease_in`, `ease_out`, or
+`ease_in_out`). Optional `report_steps`
 (INT, default 20, range 1–10000) sets the step count for the text preview only.
 Missing `report_steps` uses 20, including in older saved workflows.
 Outputs, in order: `model` (MODEL), `positive` (CONDITIONING),
@@ -664,9 +665,20 @@ Enter `percent%:strength` points, one per line or separated by commas.
 For example, `10%:1` means strength 1 at 10% of sampling. Older schedules
 without the `%` sign (such as `10:1`) remain supported.
 Percentages use **0–100**, must increase, and cannot repeat. Strengths can be
-negative or positive (-100 to 100). Linear interpolation fades between points;
-constant interpolation switches at each point. Before the first point and
-after the last point, that endpoint strength is held. A single point gives a
+negative or positive (-100 to 100). Interpolation applies separately between
+each pair of points, for increasing or decreasing strengths:
+
+* `linear`: changes at a steady rate (the existing default).
+* `constant`: holds the previous strength, then switches at the next point.
+* `ease_in`: starts the change slowly and finishes quickly.
+* `ease_out`: starts the change quickly and finishes slowly.
+* `ease_in_out`: starts slowly, speeds up through the middle, then finishes slowly.
+
+The easing curves are quadratic and never overshoot the two strengths.
+For a fade from 1 to 0, halfway between two points the strength is 0.5 with
+`linear`, 0.75 with `ease_in`, 0.25 with `ease_out`, and 0.5 with `ease_in_out`.
+The text preview uses the same curve as the sampling hooks.
+Before the first point and after the last point, that endpoint strength is held. A single point gives a
 constant strength. An all-zero timeline bypasses file loading and model cloning.
 
 Default timeline:
@@ -713,6 +725,8 @@ Test in ComfyUI: restart and refresh, add **mAI scheduled LoRA**, connect MODEL
 and both encoded prompts, select a compatible LoRA, then connect the first three
 outputs to KSampler. Connect the appended `schedule_text` output to a text display and
 match `report_steps` to KSampler's executed step count; check the rows above.
+Try all easing options: at step 6/20 (25%) in the default schedule, `ease_in`
+reports 0.75, `ease_out` reports 0.25, and `ease_in_out` reports 0.5.
 At a fixed seed compare the default curve with `0%:0` (off),
 `0%:1` (always on), and a fade-in curve. Chain nodes using all three connections
 to schedule several LoRAs. Automated tests:

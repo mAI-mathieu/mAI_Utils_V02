@@ -2,11 +2,13 @@
 
 if __package__ == "nodes":
     from utils.lora_schedule import (
-        DEFAULT_LORA_SCHEDULE, format_lora_schedule_report, parse_lora_schedule,
+        DEFAULT_LORA_SCHEDULE, INTERPOLATION_METHODS,
+        format_lora_schedule_report, parse_lora_schedule,
     )
 else:
     from ..utils.lora_schedule import (
-        DEFAULT_LORA_SCHEDULE, format_lora_schedule_report, parse_lora_schedule,
+        DEFAULT_LORA_SCHEDULE, INTERPOLATION_METHODS,
+        format_lora_schedule_report, parse_lora_schedule,
     )
 
 
@@ -17,8 +19,9 @@ class MAIScheduledLora:
     RETURN_NAMES = ("model", "positive", "negative", "schedule_text")
     DESCRIPTION = (
         "Controls diffusion-model LoRA strength throughout sampling. Enter one "
-        "percent%:strength point per line, e.g. 25%:0.5. Linear fades between points; constant "
-        "holds until the next point. Connect model, positive and negative to the sampler. "
+        "percent%:strength point per line, e.g. 25%:0.5. Linear fades at a steady rate; "
+        "ease_in, ease_out and ease_in_out shape each fade; constant holds until the "
+        "next point. Connect model, positive and negative to the sampler. "
         "Percentages refer to the steps executed in each sampler run. The schedule_text "
         "output previews strength per step using report_steps; set it to the sampler's executed step count."
     )
@@ -39,8 +42,8 @@ class MAIScheduledLora:
                 "default": DEFAULT_LORA_SCHEDULE, "multiline": True,
                 "tooltip": "Progress % : LoRA strength, one per line (or comma-separated). Example: 0%:1, 10%:1, 40%:0, 100%:0. 10%:1 means strength 1 at 10% of sampling. Percentages: 0–100; strengths: -100–100.",
             }),
-            "interpolation": (["linear", "constant"], {
-                "tooltip": "Linear fades between points. Constant holds each strength until the next point.",
+            "interpolation": (list(INTERPOLATION_METHODS), {
+                "tooltip": "Linear: steady fade. Constant: hold then switch. Ease in: starts slowly, finishes quickly. Ease out: starts quickly, finishes slowly. Ease in/out: slow start and finish. Easing applies separately between each pair of points, for fades in or out.",
             }),
         }, "optional": {
             "report_steps": ("INT", {
@@ -51,7 +54,7 @@ class MAIScheduledLora:
 
     def run(self, model, positive, negative, lora_name, schedule, interpolation, report_steps=20):
         points = parse_lora_schedule(schedule)
-        if interpolation not in ("linear", "constant"):
+        if interpolation not in INTERPOLATION_METHODS:
             raise ValueError(f"Unknown LoRA schedule interpolation: {interpolation}")
         schedule_text = f"LoRA: {lora_name}\n" + format_lora_schedule_report(
             points, interpolation, report_steps,
