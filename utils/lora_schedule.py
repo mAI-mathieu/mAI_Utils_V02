@@ -4,11 +4,11 @@ from bisect import bisect_right
 import math
 
 
-DEFAULT_LORA_SCHEDULE = "0:1\n10:1\n40:0\n100:0"
+DEFAULT_LORA_SCHEDULE = "0%:1\n10%:1\n40%:0\n100%:0"
 
 
 def parse_lora_schedule(text):
-    """Read ordered percent:strength points, separated by lines or commas."""
+    """Read percent%:strength points, accepting legacy points without %."""
     points = []
     for entry in text.replace(",", "\n").splitlines():
         entry = entry.strip()
@@ -20,7 +20,7 @@ def parse_lora_schedule(text):
             strength = float(strength_text.strip())
         except ValueError as exc:
             raise ValueError(
-                f"Invalid LoRA schedule point {entry!r}. Use percent:strength, e.g. 25:0.5."
+                f"Invalid LoRA schedule point {entry!r}. Use percent%:strength, e.g. 25%:0.5."
             ) from exc
         if not math.isfinite(percent) or not 0 <= percent <= 100:
             raise ValueError("LoRA schedule percentages must be finite numbers from 0 to 100.")
@@ -30,7 +30,7 @@ def parse_lora_schedule(text):
             raise ValueError("LoRA schedule percentages must be strictly increasing (no duplicates).")
         points.append((percent, strength))
     if not points:
-        raise ValueError("LoRA schedule must contain at least one percent:strength point.")
+        raise ValueError("LoRA schedule must contain at least one percent%:strength point, e.g. 0%:1.")
     return tuple(points)
 
 

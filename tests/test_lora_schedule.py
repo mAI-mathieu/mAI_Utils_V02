@@ -14,6 +14,8 @@ def test_parse_lines_commas_percent_signs_and_negative_strengths():
     assert parse_lora_schedule("\n 0%: -1, 25:0.5\n100:2\n") == (
         (0, -1), (25, 0.5), (100, 2),
     )
+    assert DEFAULT_LORA_SCHEDULE == "0%:1\n10%:1\n40%:0\n100%:0"
+    assert parse_lora_schedule(DEFAULT_LORA_SCHEDULE) == parse_lora_schedule("0:1,10:1,40:0,100:0")
 
 
 @pytest.mark.parametrize("text", [

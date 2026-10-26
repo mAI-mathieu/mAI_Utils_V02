@@ -660,7 +660,9 @@ Outputs, in order: `model` (MODEL), `positive` (CONDITIONING),
 Connect **model, positive and negative** to the sampler. Keep the original CLIP
 connected to your text encoders; this node schedules only the diffusion-model weights.
 
-Enter `percent:strength` points, one per line or separated by commas.
+Enter `percent%:strength` points, one per line or separated by commas.
+For example, `10%:1` means strength 1 at 10% of sampling. Older schedules
+without the `%` sign (such as `10:1`) remain supported.
 Percentages use **0–100**, must increase, and cannot repeat. Strengths can be
 negative or positive (-100 to 100). Linear interpolation fades between points;
 constant interpolation switches at each point. Before the first point and
@@ -670,14 +672,14 @@ constant strength. An all-zero timeline bypasses file loading and model cloning.
 Default timeline:
 
 ```text
-0:1
-10:1
-40:0
-100:0
+0%:1
+10%:1
+40%:0
+100%:0
 ```
 
 This holds strength 1 for the first 10%, fades to 0 over the next 30%, then
-stays off. To fade in and out, try `0:0, 20:1, 60:1, 100:0`. For abrupt changes,
+stays off. To fade in and out, try `0%:0, 20%:1, 60%:1, 100%:0`. For abrupt changes,
 select `constant`. Configure the timeline before queuing; this is not a live
 slider for changing a running job.
 
@@ -711,8 +713,8 @@ Test in ComfyUI: restart and refresh, add **mAI scheduled LoRA**, connect MODEL
 and both encoded prompts, select a compatible LoRA, then connect the first three
 outputs to KSampler. Connect the appended `schedule_text` output to a text display and
 match `report_steps` to KSampler's executed step count; check the rows above.
-At a fixed seed compare the default curve with `0:0` (off),
-`0:1` (always on), and a fade-in curve. Chain nodes using all three connections
+At a fixed seed compare the default curve with `0%:0` (off),
+`0%:1` (always on), and a fade-in curve. Chain nodes using all three connections
 to schedule several LoRAs. Automated tests:
 `python -m pytest tests/test_lora_schedule.py tests/test_scheduled_lora.py`.
 

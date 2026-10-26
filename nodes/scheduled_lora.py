@@ -17,7 +17,7 @@ class MAIScheduledLora:
     RETURN_NAMES = ("model", "positive", "negative", "schedule_text")
     DESCRIPTION = (
         "Controls diffusion-model LoRA strength throughout sampling. Enter one "
-        "percent:strength point per line. Linear fades between points; constant "
+        "percent%:strength point per line, e.g. 25%:0.5. Linear fades between points; constant "
         "holds until the next point. Connect model, positive and negative to the sampler. "
         "Percentages refer to the steps executed in each sampler run. The schedule_text "
         "output previews strength per step using report_steps; set it to the sampler's executed step count."
@@ -37,7 +37,7 @@ class MAIScheduledLora:
             "lora_name": (folder_paths.get_filename_list("loras"),),
             "schedule": ("STRING", {
                 "default": DEFAULT_LORA_SCHEDULE, "multiline": True,
-                "tooltip": "percent:strength, one per line (or comma-separated). Example: 0:1, 10:1, 40:0, 100:0. Percentages: 0–100; strengths: -100–100.",
+                "tooltip": "Progress % : LoRA strength, one per line (or comma-separated). Example: 0%:1, 10%:1, 40%:0, 100%:0. 10%:1 means strength 1 at 10% of sampling. Percentages: 0–100; strengths: -100–100.",
             }),
             "interpolation": (["linear", "constant"], {
                 "tooltip": "Linear fades between points. Constant holds each strength until the next point.",
