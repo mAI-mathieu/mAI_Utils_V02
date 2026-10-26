@@ -10,6 +10,7 @@ from .nodes.gpu_video_combine import MAIGPUVideoCombine
 from .nodes.h3_to_ltx_frame_adapter import MAIH3ToLTXFrameAdapter
 from .nodes.image_aspect_ratio import MAIImageAspectRatio
 from .nodes.image_blur import MAIImageBlur
+from .nodes.image_composite_masked import MAIImageCompositeMasked
 from .nodes.image_gate import MAIImageGate
 from .nodes.image_logic_check import MAIImageLogicCheck
 from .nodes.int_to_nearest_multiple import MAIIntToNearestMultiple
@@ -59,6 +60,7 @@ NODE_CLASS_MAPPINGS = {
     "MAIH3ToLTXFrameAdapter": MAIH3ToLTXFrameAdapter,
     "MAIImageAspectRatio": MAIImageAspectRatio,
     "MAIImageBlur": MAIImageBlur,
+    "MAIImageCompositeMasked": MAIImageCompositeMasked,
     "MAIImageGate": MAIImageGate,
     "MAIImageLogicCheck": MAIImageLogicCheck,
     "MAIIntToNearestMultiple": MAIIntToNearestMultiple,
@@ -91,6 +93,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MAIH3ToLTXFrameAdapter": "mAI H3 to LTX Frame Adapter",
     "MAIImageAspectRatio": "mAI image aspect ratio",
     "MAIImageBlur": "mAI image blur",
+    "MAIImageCompositeMasked": "mAI image composite masked",
     "MAIImageGate": "mAI image gate",
     "MAIImageLogicCheck": "mAI Image Logic Check",
     "MAIIntToNearestMultiple": "mAI int to nearest multiple",

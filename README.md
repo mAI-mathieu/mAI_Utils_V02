@@ -5,6 +5,54 @@ ComfyUI custom node pack for small, reusable mAI utility nodes.
 Install this folder under ComfyUI's `custom_nodes` directory, then restart ComfyUI.
 The currently registered nodes are listed below.
 
+## mAI image composite masked
+
+Location: `mAI / Image`. Registered as `MAIImageCompositeMasked`.
+Composites two aligned, same-size images. Required inputs:
+
+* `destination_image` (IMAGE): background/base, kept under black mask pixels.
+* `source_image` (IMAGE): image to place onto the destination.
+* `source_mask` (MASK): **applies to source_image**. White (1) takes the source
+  exactly; black (0) keeps the destination exactly. Gray values strictly between
+  0 and 1 define the feather area. Values are clamped to 0–1.
+* `blend_mode`: four separate modes, described below.
+
+Modes:
+
+* `feather` (default): normal alpha blending using the supplied soft mask.
+* `content_aware_seam`: a CPU graph cut chooses source or destination pixels
+  through lower RGB disagreement inside the feather area. A weak mask prior
+  favors the center when content is ambiguous. Supports irregular regions and
+  holes; this is a hard seam and does not generate or color-match content.
+* `center_cut`: hard source/destination cut at mask value 0.5 (source wins ties).
+* `multiband`: Laplacian image pyramids with a Gaussian mask pyramid blend
+  multiple detail scales. Corrections fade toward the hard mask endpoints and
+  apply only to gray pixels. Optional `multiband_levels` defaults to 5 (1–10);
+  1 equals normal feather, and larger values blend larger features.
+
+Output: one `image` (IMAGE), at destination resolution, dtype and device.
+RGB/RGBA images must have matching channels. Masks accept `[H,W]` or `[B,H,W]`.
+Singleton image/mask batches broadcast; other batch mismatches raise an error.
+RGBA alpha follows the selected mask (ordinary feather in multiband mode).
+Input tensors are not modified. Empty/full/binary masks keep exact endpoints
+in every mode. The node uses existing feathering and never creates a new band.
+
+Limitations: images must already be aligned and at the same resolution; there
+are no positioning or resizing controls. Hard masks have no feather area, so
+all modes give the same hard composite. Seam cuts can change small structures
+within gray pixels; multiband can soften details there. Very narrow feather
+bands limit all blending. Content-aware analysis uses SciPy, already required
+by ComfyUI, and automatically reduces the search resolution when there are
+more than 262,144 gray pixels; final hard endpoints remain exact at native
+resolution. Other modes use PyTorch. No new packages are required.
+
+Test in ComfyUI: restart, refresh, add **mAI image composite masked**, connect
+two aligned images and a feathered mask to `source_mask`, and preview `image`.
+Compare all four `blend_mode` choices. Check that black areas keep the
+destination and white areas take the source in every mode. For multiband,
+compare levels 1 and 5. Automated tests:
+`python -m pytest --confcutdir=tests tests/test_masked_image_composite.py`.
+
 ## mAI mask fill
 
 Location: `mAI / Image`. Registered as `MAIMaskFill`.
@@ -18,6 +66,13 @@ Settings:
 * `color`: hexadecimal `#RRGGBB`, default `#000000`; only used by `color`.
 * `inpaint_radius`: neighborhood radius in pixels, default 3.0; only used by
   Telea and Navier–Stokes, which reconstruct the area from surrounding pixels.
+
+The node shows `color` only in color mode and `inpaint_radius` only in Telea
+or Navier–Stokes mode. Switching modes preserves both settings, including after
+loading a saved workflow. When `method` is connected to another node, both
+settings remain available because its value is determined during execution.
+Converted input sockets remain available in every mode. If the frontend
+extension fails to load, both settings remain visible and execution still works.
 
 Supports floating RGB/RGBA images `[B,H,W,C]` and masks `[H,W]` or `[B,H,W]`
 at the same resolution. A single image or mask broadcasts over the other batch;
@@ -36,7 +91,9 @@ An existing OpenCV installation providing `cv2.inpaint` is sufficient.
 Test in ComfyUI: restart, refresh the browser, add **mAI mask fill**, connect a
 source image and a same-size mask, then connect `image` to **Preview Image**.
 Try `color` with `#FF0000`, then `telea` and `navier_stokes` on a small white
-mask region; verify black mask areas stay unchanged. Save/reload the workflow.
+mask region; verify black mask areas stay unchanged and only the relevant
+setting is shown. Save/reload the workflow and check the selected mode and
+hidden settings are retained.
 Automated tests: `python -m pytest tests/test_mask_fill.py` in an environment
 with PyTorch; OpenCV-specific tests skip if OpenCV is missing.
 
