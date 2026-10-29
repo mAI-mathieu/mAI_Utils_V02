@@ -9,27 +9,44 @@ The currently registered nodes are listed below.
 
 Location: `mAI / Image`. Registered as `MAIPixelDriftFix`.
 Conservatively realigns an image-model edit to the source's framing using a
-global perspective transform. Inspired by
+global translation or perspective transform. Inspired by
 [ComfyUI-PixelDriftFix](https://github.com/Mozer/ComfyUI-PixelDriftFix), with
 additional checks before any output pixels are changed. No models or network calls.
+
+New nodes default to **mode = auto**: connect the two images and queue, with no
+tuning needed. Auto measures feature motion and noise for each pair, prefers a
+simple translation for uniform small shifts, and uses perspective alignment only
+when the motion needs it. Feature residuals and match agreement determine the
+required structural similarity; uncertain/flexible fits require stronger evidence.
+Automatic correction is limited to 8% corner movement per axis. The two manual
+controls below are ignored and hidden in Auto; choose Manual to expose them.
+
+The mode selector is appended after the existing controls. Older saved workflows
+without a mode retain Manual behavior and their settings; select Auto once to
+upgrade them. API calls without `mode` also retain Manual behavior. Sockets and
+output order stay unchanged; detection works without the frontend extension.
 
 Inputs:
 
 * `source_image` (IMAGE): reference image sent to the image-edit model.
 * `edited_image` (IMAGE): model result to align, or pass through unchanged.
-* `min_similarity`: default **0.60**. Required fraction of usable tiles with
-  matching grayscale structure after alignment. Higher rejects more ambiguous
+* `mode`: **auto** for new nodes; `manual` uses the following two controls.
+* `min_similarity` (Manual only): default **0.60**. Required fraction of usable
+  tiles with matching grayscale structure after alignment. Higher rejects more ambiguous
   pairs; lower permits larger edits. Range 0.30–1.0. This is a structural
   agreement measure, not a semantic similarity probability.
-* `max_drift`: default **0.15**. Maximum corner movement relative to image width
-  and height; includes translation, rotation, scale and perspective. Range 0.01–0.30.
+* `max_drift` (Manual only): default **0.15**. Maximum corner movement relative to
+  image width and height; includes translation, rotation, scale and perspective.
+  Range 0.01–0.30.
 
 Outputs, in order: `image` (IMAGE) and `alignment_info` (STRING, one decision
-per batch pair with reason, structural similarity and inlier count).
+per batch pair with reason, mode, selected transform, structural similarity and
+inlier count).
 
-Default behavior: reciprocal SIFT matching, RANSAC, at least 12 consistent matches,
-55% match agreement, and matching points spread across at least 20% of each image
-and four grid cells. The candidate transform must have safe geometry, preserve
+Default behavior: reciprocal SIFT matching, robust translation or RANSAC
+perspective fitting, at least 12 consistent matches, 55% match agreement, and
+matching points spread across at least 20% of each image and four grid cells.
+The candidate transform must have safe geometry, preserve
 enough image structure across an 8×8 tile grid, and improve alignment. A small
 shared logo alone is insufficient. Already aligned, unrelated, featureless,
 excessively reframed or uncertain pairs return the **edited image exactly**.
@@ -54,9 +71,10 @@ no scikit-image or extra neural model required.
 
 Test in ComfyUI: restart and refresh, add **mAI pixel drift fix**, connect the image
 sent to your edit model to `source_image` and the decoded result to `edited_image`.
-Preview `image` and inspect `alignment_info` with a text display node. Try a small
-shift with a localized edit, then an unrelated picture: the latter should pass
-through unchanged. It can precede **mAI image preserve source** for same-size pairs.
+Leave `mode=auto`, preview `image` and inspect `alignment_info` with a text display
+node. Try a small shift with a localized edit, then an unrelated picture: the latter should pass
+through unchanged. Switch Auto/Manual and save/reload to check mode persistence.
+It can precede **mAI image preserve source** for same-size pairs.
 Automated tests: `python -m pytest --confcutdir=tests tests/test_pixel_drift.py`.
 
 ## mAI image preserve source
@@ -68,19 +86,32 @@ and its decoded result to `edited_image`. Outputs, in order: `image` (IMAGE)
 and `change_mask` (MASK: black keeps original, white takes edited).
 
 Select optional `mode` = **auto** to estimate the settings for each image pair.
-Auto analyzes blurred RGB and normalized local structure at multiple scales,
-estimates background drift from robust whole-image and local tile statistics,
-joins weak changes to strong edit regions, fills enclosed gaps, and rejects tiny
-isolated detections. Region size, image resolution and boundary disagreement
-determine feather width and pyramid depth. It uses content-aware seam + multiband
-blending; all eight manual tuning controls are ignored and hidden in Auto.
-An optional `edit_mask` still limits the allowed area in both modes.
+Auto first checks how much local structure still matches, excluding flat areas
+that cannot establish correspondence. It chooses one of three strategies:
+
+* Localized edits: estimate background drift from whole-image and local tile
+  statistics, join weaker changes to strong edit regions, and reject tiny
+  isolated detections. Detected regions stay solid; a narrower transition lies
+  outside them. A content-aware seam chooses fine/medium detail from one image;
+  only a coarse color layer is softly blended, reducing mixed or softened edges.
+* Widespread color/lighting edits with matching structure: keep the edited image
+  as the base and cautiously recover compatible source detail.
+* Poor correspondence or major composition changes: keep the edited image
+  exactly instead of piecing the old scene back into it. The supplied protection
+  mask, if any, still applies.
+
+Detail recovery checks both local structure and fine-detail correlation at native
+resolution, and only operates where the selection mask is fully white. It restores
+some missing luminance detail using the edited hue and lighting. Corrections are
+bounded to 0.02 luminance and a 5% RGB gain; flat replacements, displaced texture
+and gray/black mask areas receive no recovery. It does not hallucinate new detail.
+All eight manual controls are ignored and hidden in Auto. Optional `edit_mask`
+still limits the allowed area in every strategy.
 
 Auto uses CPU analysis at up to 768 pixels on the long side, then lifts its mask
 to native resolution and applies the original protection mask exactly. Each
-batch pair gets its own analysis. Stable areas use source pixels directly;
-inside fully selected regions the edited image supplies all detail. Auto does
-not transfer old texture across moved features or load an extra neural model.
+batch pair gets its own strategy and analysis. Stable areas use source pixels
+directly. No image is warped or globally sharpened, and no neural model is loaded.
 It needs SciPy, already used by the content-aware compositor.
 
 `mode` defaults to **manual** to preserve existing saved workflows and API calls.
@@ -119,21 +150,23 @@ Manual settings and defaults:
   protects the original, even after expansion/feathering; white allows automatic
   detection, gray attenuates it. Missing mask allows detection everywhere.
 
-Black output-mask pixels preserve the original exactly; white takes the edit
-exactly. Only gray pixels receive blending/seam corrections. The output mask
-shows the allowed transition band; content-aware modes choose a hard seam
-within it, so gray does not describe their final per-pixel opacity. No mode
-changes the original outside this mask or restores source detail inside a fully
-selected edit. Input images and masks are never modified.
+Black output-mask pixels preserve the original exactly. In Manual, white takes
+the edit exactly and only gray receives blending/seam corrections. Auto white
+selects the edit with any accepted detail recovery; gray is the transition band.
+Content-aware seams select source/edit detail inside that band, so gray does not
+describe final per-pixel opacity. A full white Auto mask may indicate a global
+edit or a conservative pass-through. Input images and masks are never modified.
 
-Limitations: Auto assumes much of the allowed area is unchanged. It cannot infer
-editing intent: subtle edits may disappear, and coherent artifacts may remain.
-Widespread strong differences lack a reliable background baseline, so Auto
-conservatively keeps the edit. Very small edits can disappear at the bounded
-analysis resolution. For ambiguous cases use an allowed edit mask or Manual.
+Limitations: the localized strategy assumes enough unchanged background remains.
+Auto cannot infer editing intent: subtle edits may disappear, coherent artifacts
+may remain, and heuristic correspondence checks can be wrong. Low-confidence
+large changes may pass through without any quality recovery. Detail recovery is
+conservative and can restore source grain or affect matching fine texture; it
+cannot recover genuinely new content. Very small edits can disappear at the
+bounded analysis resolution. For ambiguous cases use an edit mask or Manual.
 Images must already be aligned with matching resolution and RGB/
-RGBA channels. Resizing, cropping, camera shifts and large global color changes
-can trigger false detections. Subtle intended changes may be rejected, and
+RGBA channels. Resizing, cropping and camera shifts can trigger pass-through
+or false detections. Subtle intended changes may be rejected, and
 large artifacts may be retained: inspect `change_mask` and tune the settings.
 Alpha does not drive detection; it follows the composite mask/seam. Singleton
 image/mask batches broadcast; other batch mismatches raise errors. Output keeps
@@ -145,10 +178,17 @@ Test in ComfyUI: restart and refresh, add **mAI image preserve source**, connect
 an aligned source and edit, and preview `image`. Connect `change_mask` through
 **Convert Mask to Image** to another preview. Select `mode=auto`, queue, and check
 that meaningful edit regions survive while stable areas retain source detail.
-Try a different pair without adjusting any settings. Test an optional edit mask
+Try a localized edit, recoloring, relighting and a replacement scene without
+changing any settings. Major reframing should retain the edited composition;
+relighting should keep the new lighting. Inspect changed features at 100% for
+sharpness. Test an optional edit mask
 and verify black areas stay exactly original. Switch to Manual and back, then
 save/reload to verify the mode and tuning values persist. Automated tests:
-`python -m pytest --confcutdir=tests tests/test_image_preserve_source.py tests/test_image_edit_detection.py`.
+`python -m pytest --confcutdir=tests tests/test_image_preserve_source.py tests/test_image_edit_detection.py tests/test_image_edit_blend.py`.
+For repeatable visual checks, run
+`python scripts/evaluate_source_preservation.py source.png edit1.png edit2.png --tag before`
+before changing the implementation, then repeat with `--tag after`. Native PNGs,
+masks, comparison sheets and analysis reports are written to `output/preserve_review/`.
 
 ## mAI image composite masked
 

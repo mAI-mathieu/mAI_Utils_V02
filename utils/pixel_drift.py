@@ -15,6 +15,7 @@ class AlignmentDecision:
     reason: str = "insufficient matching features"
     similarity: float = 0.0
     inliers: int = 0
+    model: str = "perspective"
 
 
 def _opencv():
@@ -81,13 +82,47 @@ def _structure_scores(reference, candidate, valid, cv2):
     return np.asarray(scores)
 
 
-def estimate_alignment(reference, edited, min_similarity=0.60, max_drift=0.15):
+def _translation_fit(edit_points, ref_points):
+    """Prefer a robust translation when feature motion is uniform.
+
+    A median rejects changed objects. The tolerance follows the measured feature
+    noise, with a tight cap to avoid explaining rotation or scale as a shift.
+    """
+    offsets = ref_points - edit_points
+    shift = np.median(offsets, axis=0)
+    noise = float(np.median(np.abs(offsets - shift))) * 1.4826
+    tolerance = float(np.clip(3 * noise, 0.35, 1.25))
+    keep = np.linalg.norm(offsets - shift, axis=1) <= tolerance
+    if keep.sum() < 12 or keep.mean() < 0.55:
+        return None, None
+    shift = np.median(offsets[keep], axis=0)
+    residuals = np.linalg.norm(offsets - shift, axis=1)
+    keep = residuals <= tolerance
+    if keep.sum() < 12 or keep.mean() < 0.55 or np.quantile(residuals[keep], 0.90) > 0.60:
+        return None, None
+    matrix = np.float64([[1, 0, shift[0]], [0, 1, shift[1]], [0, 0, 1]])
+    return matrix, keep
+
+
+def _resolve_settings(mode, min_similarity, max_drift):
+    if mode == "auto":
+        # A fixed safety ceiling limits automatic correction to small reframing.
+        # Match noise later determines the required structural agreement.
+        return 0.60, 0.08
+    if mode != "manual":
+        raise ValueError(f"Unknown pixel drift mode: {mode}")
+    _validate_settings(min_similarity, max_drift)
+    return min_similarity, max_drift
+
+
+def estimate_alignment(reference, edited, min_similarity=0.60, max_drift=0.15,
+                       mode="manual"):
     """Estimate edited -> reference homography on equal-sized uint8 grayscale arrays.
 
     Arrays are bounded previews; no output pixels are generated here. Expected
     nonmatches return a decision with no matrix. Invalid settings raise errors.
     """
-    _validate_settings(min_similarity, max_drift)
+    min_similarity, max_drift = _resolve_settings(mode, min_similarity, max_drift)
     if reference.ndim != 2 or reference.shape != edited.shape:
         raise ValueError("Alignment previews must be matching 2D grayscale arrays.")
     decision = AlignmentDecision()
@@ -119,9 +154,15 @@ def estimate_alignment(reference, edited, min_similarity=0.60, max_drift=0.15):
         return decision
     edit_points = np.float32([edit_keys[a].pt for a, _ in pairs])
     ref_points = np.float32([ref_keys[b].pt for _, b in pairs])
-    matrix, mask = cv2.findHomography(
-        edit_points, ref_points, cv2.RANSAC, 2.5, maxIters=3000, confidence=0.995,
-    )
+    matrix, mask = None, None
+    if mode == "auto":
+        matrix, mask = _translation_fit(edit_points, ref_points)
+        if matrix is not None:
+            decision.model = "translation"
+    if matrix is None:
+        matrix, mask = cv2.findHomography(
+            edit_points, ref_points, cv2.RANSAC, 2.5, maxIters=3000, confidence=0.995,
+        )
     if matrix is None or mask is None:
         decision.reason = "no consistent transform"
         return decision
@@ -137,9 +178,16 @@ def estimate_alignment(reference, edited, min_similarity=0.60, max_drift=0.15):
         decision.reason = "transform exceeds safe drift limits"
         return decision
     projected = cv2.perspectiveTransform(edit_points[keep][None], matrix)[0]
-    if np.median(np.linalg.norm(projected - ref_points[keep], axis=1)) > 1.5:
+    residual = float(np.median(np.linalg.norm(projected - ref_points[keep], axis=1)))
+    if residual > 1.5:
         decision.reason = "alignment residual is too large"
         return decision
+    if mode == "auto":
+        # Noisy matches and more flexible models need more independent evidence
+        # across the image. Clean translations can tolerate larger local edits.
+        min_similarity += min(0.10, residual * 0.10) + 0.05 * (1 - keep.mean())
+        if decision.model == "perspective":
+            min_similarity += 0.05
     valid = cv2.warpPerspective(np.ones_like(edited), matrix, (width, height), flags=cv2.INTER_NEAREST) > 0
     valid = cv2.erode(valid.astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool)
     warped = cv2.warpPerspective(edited, matrix, (width, height))
@@ -152,7 +200,8 @@ def estimate_alignment(reference, edited, min_similarity=0.60, max_drift=0.15):
     grid = np.float32([(x, y) for y in np.linspace(0, height - 1, 5)
                       for x in np.linspace(0, width - 1, 5)])
     moved = cv2.perspectiveTransform(grid[None], matrix)[0]
-    if np.max(np.linalg.norm(moved - grid, axis=1)) < 0.35:
+    minimum_movement = 0.10 if mode == "auto" else 0.35
+    if np.max(np.linalg.norm(moved - grid, axis=1)) < minimum_movement:
         decision.reason = "already aligned"
         return decision
     before = _structure_scores(reference, edited, valid, cv2)
@@ -194,7 +243,8 @@ def _preview(image, size, cv2):
     return cv2.cvtColor(np.rint(rgb * 255).astype(np.uint8), cv2.COLOR_RGB2GRAY)
 
 
-def fix_pixel_drift(source_image, edited_image, min_similarity=0.60, max_drift=0.15):
+def fix_pixel_drift(source_image, edited_image, min_similarity=0.60, max_drift=0.15,
+                    mode="manual"):
     """Align each edit conservatively, retaining edit resolution/dtype/device.
 
     Singleton batches broadcast; other batch mismatches are errors. Rejected
@@ -202,7 +252,7 @@ def fix_pixel_drift(source_image, edited_image, min_similarity=0.60, max_drift=0
     """
     import torch
 
-    _validate_settings(min_similarity, max_drift)
+    _resolve_settings(mode, min_similarity, max_drift)
     _validate_image(source_image, "source_image")
     _validate_image(edited_image, "edited_image")
     source_count, edit_count = source_image.shape[0], edited_image.shape[0]
@@ -227,7 +277,7 @@ def fix_pixel_drift(source_image, edited_image, min_similarity=0.60, max_drift=0
             if key not in previews:
                 previews[key] = _preview(batch[frame_index], preview_size, cv2)
         decision = estimate_alignment(previews["source", source_index], previews["edit", edit_index],
-                                      min_similarity, max_drift)
+                                      min_similarity, max_drift, mode)
         frame = edited_image[edit_index]
         if decision.matrix is not None:
             native_matrix = from_preview @ decision.matrix @ to_preview
@@ -239,6 +289,9 @@ def fix_pixel_drift(source_image, edited_image, min_similarity=0.60, max_drift=0
             frame = torch.from_numpy(pixels).to(device=edited_image.device, dtype=edited_image.dtype)
             any_corrected = True
         frames.append(frame)
-        messages.append(f"Image {index + 1}: {decision.reason}; similarity={decision.similarity:.2f}; inliers={decision.inliers}")
+        messages.append(
+            f"Image {index + 1}: {decision.reason}; mode={mode}; model={decision.model}; "
+            f"similarity={decision.similarity:.2f}; inliers={decision.inliers}"
+        )
     result = torch.stack(frames) if any_corrected else edited_image.expand(len(frames), -1, -1, -1)
     return result, "\n".join(messages)

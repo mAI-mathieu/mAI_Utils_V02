@@ -7,6 +7,7 @@ import torch.nn.functional as F
 
 from .image_blur import blur_image
 from .image_edit_detection import detect_image_edits
+from .image_edit_blend import blend_edit_preserving_details, recover_matching_detail
 from .masked_image_composite import BLEND_MODES, composite_with_source_mask
 
 
@@ -77,10 +78,18 @@ def preserve_source_image(
                 allowed[index:index + 1],
             )
             masks[index] = mask[0]
-            result[index:index + 1] = composite_with_source_mask(
-                original[index:index + 1], edited[index:index + 1], mask,
-                "content_aware_seam_multiband", settings.multiband_levels,
-            )
+            first, second = original[index:index + 1], edited[index:index + 1]
+            if settings.strategy == "edited":
+                # Correspondence is unreliable: retain the new composition.
+                result[index:index + 1] = composite_with_source_mask(first, second, mask)
+            else:
+                corrected = recover_matching_detail(first, second, mask)
+                if settings.strategy == "global_detail":
+                    result[index:index + 1] = composite_with_source_mask(first, corrected, mask)
+                else:
+                    result[index:index + 1] = blend_edit_preserving_details(
+                        first, corrected, mask, settings.multiband_levels,
+                    )
         return result, masks
     for name, value, maximum in (
         ("difference_threshold", difference_threshold, 1),

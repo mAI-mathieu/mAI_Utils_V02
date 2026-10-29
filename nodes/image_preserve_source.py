@@ -17,7 +17,9 @@ class MAIImagePreserveSource:
         "Keep the original image except where a substantial edit is detected. "
         "Compare aligned images at pixel and blurred scales, then blend their "
         "join with feather, multiband, or content-aware seams. Select auto to "
-        "estimate drift, group edits and choose blending scales automatically."
+        "estimate drift, preserve edit sharpness, and retain the edited image "
+        "when the composition no longer matches. Matching areas can recover "
+        "some source detail without restoring the old lighting or color."
     )
 
     @classmethod

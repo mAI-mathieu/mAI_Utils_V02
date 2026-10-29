@@ -18,6 +18,31 @@ class AutoEditSettings:
     high_threshold: float
     feather_pixels: float
     multiband_levels: int
+    strategy: str = "localized"
+    structure_match: float = 1.0
+    changed_fraction: float = 0.0
+
+
+def _classify_relationship(color, structure, texture, eligible):
+    """Decide whether source pixels are still meaningful at the same locations.
+
+    Flat sky cannot prove correspondence. Measure agreement on textured pixels,
+    while also requiring substantial changes before rejecting a localized pair.
+    These are image statistics, not probabilities of semantic editing intent.
+    """
+    textured = (texture > 0.008) & eligible
+    usable = int(textured.sum()) >= max(16, int(eligible.sum() * 0.02))
+    match = float((structure[textured] < 0.2).mean()) if usable else 1.0
+    changed = float((color[eligible] > 0.06).mean())
+    mismatch_coverage = float(((structure > 0.4) & textured)[eligible].mean())
+    if usable and match < 0.4 and (changed > 0.2 or mismatch_coverage > 0.2):
+        return "edited", match, changed
+    if usable and match > 0.7 and changed > 0.65:
+        return "global_detail", match, changed
+    # No stable population exists for estimating noise in a strong global edit.
+    if np.quantile(color[eligible], 0.2) > 0.06:
+        return "edited", match, changed
+    return "localized", match, changed
 
 
 def _local_structure_difference(original, edited):
@@ -36,7 +61,20 @@ def _local_structure_difference(original, edited):
     correlation = (covariance + stabilizer) / (
         (first_var * second_var).sqrt() + stabilizer
     )
+    # A flat replacement cannot prove that a textured source still matches.
+    # Allow ordinary contrast/lighting changes, but reject near-total loss of
+    # the signal used to establish geometric correspondence.
+    no_correspondence = (first_var > 0.008 ** 2) & (second_var < first_var * 0.0025)
+    correlation = torch.where(no_correspondence, 0, correlation)
     return (1 - correlation[..., 0]).clamp(0, 1), first_var[..., 0].sqrt()
+
+
+def _analysis_blur(image, strength):
+    """Reflect analysis borders to avoid mistaking padding bias for an edit."""
+    radius = math.ceil(3 * strength)
+    mode = "reflect" if min(image.shape[1:3]) > radius else "replicate"
+    padded = F.pad(image.movedim(-1, 1), (radius,) * 4, mode=mode).movedim(1, -1)
+    return blur_image(padded, strength)[:, radius:-radius, radius:-radius]
 
 
 def _close_regions(regions, radius, ndimage):
@@ -105,8 +143,9 @@ def detect_image_edits(original_rgb, edited_rgb, allowed_mask):
     Inputs are validated RGB [1,H,W,3] and an allowed MASK [1,H,W]. Analysis
     uses at most 768 pixels on the long side; connected regions and robust
     statistics run on CPU for bounded, deterministic analysis across devices.
-    Most eligible pixels are assumed to be unchanged. Widespread strong
-    differences without a reliable background conservatively retain the edit.
+    Localized pairs use an unchanged-background baseline. Large geometric
+    changes retain the edit, while widespread photometric edits with matching
+    structure allow cautious detail recovery on the edited image.
     """
     height, width = original_rgb.shape[1:3]
     native_mask = torch.zeros_like(allowed_mask)
@@ -132,15 +171,20 @@ def detect_image_edits(original_rgb, edited_rgb, allowed_mask):
         second = F.interpolate(second, size=size, mode="area")
         allowed = F.interpolate(allowed, size=size, mode="area")
     first, second = first.movedim(1, -1), second.movedim(1, -1)
-    first_fine, second_fine = blur_image(first, 1), blur_image(second, 1)
+    first_fine, second_fine = _analysis_blur(first, 1), _analysis_blur(second, 1)
     fine = (first_fine - second_fine).abs().mean(-1)
-    broad = (blur_image(first, 3) - blur_image(second, 3)).abs().mean(-1)
+    broad = (_analysis_blur(first, 3) - _analysis_blur(second, 3)).abs().mean(-1)
     structure, texture = _local_structure_difference(first_fine, second_fine)
     color = 0.7 * fine + 0.3 * broad
+    eligible = allowed[0, 0].numpy() > 0
+    strategy, match, changed = _classify_relationship(
+        color[0].numpy(), structure[0].numpy(), texture[0].numpy(), eligible,
+    )
+    if strategy != "localized":
+        return allowed_mask.clone(), AutoEditSettings(0, 0, 0, 1, strategy, match, changed)
     # Textured areas naturally accumulate more decoder differences. Structure
     # supplies extra evidence for moved features, rather than for lost contrast.
     score = (color * (1 + structure) / (1 + 4 * texture) + 0.01 * structure)[0].numpy()
-    eligible = allowed[0, 0].numpy() > 0
     samples = score[eligible]
     background = samples[samples <= np.quantile(samples, 0.7)]
     baseline = float(np.median(background))
@@ -149,13 +193,8 @@ def detect_image_edits(original_rgb, edited_rgb, allowed_mask):
     high = max(0.012, baseline + max(0.006, 5 * deviation))
     local_low, local_high = _local_thresholds(score, eligible, low, high)
     regions = _coherent_regions(score, eligible, local_low, local_high, ndimage)
-
-    # Uniform/near-uniform large changes have no unchanged population from
-    # which to infer noise. Keep them instead of silently deleting the edit.
-    if np.quantile(color[0].numpy()[eligible], 0.2) > 0.06:
-        regions = eligible.copy()
     if not regions.any():
-        return native_mask, AutoEditSettings(low, high, 0, 1)
+        return native_mask, AutoEditSettings(low, high, 0, 1, strategy, match, changed)
 
     labels, _ = ndimage.label(regions)
     areas = np.bincount(labels.ravel())[1:]
@@ -163,15 +202,16 @@ def detect_image_edits(original_rgb, edited_rgb, allowed_mask):
     region_size = math.sqrt(float(np.sum(areas.astype(float) ** 2) / areas.sum()))
     boundary = ndimage.binary_dilation(regions) & ~regions
     disagreement = float(np.median(color[0].numpy()[boundary])) if boundary.any() else 0
-    feather = float(np.clip(1 + 0.025 * region_size + 12 * disagreement, 1, 12))
-    expansion = float(np.clip(0.015 * region_size, 0.5, 4))
+    feather = float(np.clip(0.5 + 0.008 * region_size + 4 * disagreement, 0.75, 4))
+    expansion = float(np.clip(0.5 + 0.015 * region_size, 0.5, 4))
     # Distance transforms need an explicit outside for a completely full mask.
     if regions.all():
         soft = np.ones_like(score)
     else:
-        inside = ndimage.distance_transform_edt(regions)
         outside = ndimage.distance_transform_edt(~regions)
-        soft = np.clip((inside - outside + expansion + feather) / (2 * feather), 0, 1)
+        # Detected edits stay solid. Put the transition outside their boundary,
+        # rather than averaging displaced eyes/lips across an eroded interior.
+        soft = np.clip(1 - (outside - expansion) / feather, 0, 1)
         soft = soft * soft * (3 - 2 * soft)
     mask = torch.from_numpy(soft.copy()).to(dtype=allowed_mask.dtype)[None, None]
     if size != (height, width):
@@ -182,4 +222,4 @@ def detect_image_edits(original_rgb, edited_rgb, allowed_mask):
     mask = (mask * allowed_mask).clamp(0, 1)
     feather_native = feather / scale
     levels = max(2, min(8, math.ceil(math.log2(max(2, 4 * feather_native)))))
-    return mask, AutoEditSettings(low, high, feather_native, levels)
+    return mask, AutoEditSettings(low, high, feather_native, levels, strategy, match, changed)

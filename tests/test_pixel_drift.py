@@ -3,6 +3,8 @@
 import importlib.util
 from pathlib import Path
 import sys
+import shutil
+import subprocess
 
 import numpy as np
 import pytest
@@ -161,11 +163,12 @@ def test_singleton_edit_broadcasts_without_truncating_source_batch():
 
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32, torch.float64])
-def test_warp_retains_rgba_dtype_device_and_alpha(dtype):
+@pytest.mark.parametrize("mode", ["manual", "auto"])
+def test_warp_retains_rgba_dtype_device_and_alpha(dtype, mode):
     original = scene()
     rgba = np.concatenate((original, np.full_like(original[..., :1], 0.65)), axis=-1)
     edited = tensor(drift(rgba)).to(dtype)
-    output, report = fix_pixel_drift(tensor(original).to(dtype), edited)
+    output, report = fix_pixel_drift(tensor(original).to(dtype), edited, mode=mode)
     assert "corrected" in report
     assert output.dtype == dtype and output.device == edited.device
     assert output.shape == edited.shape and torch.isfinite(output).all()
@@ -229,9 +232,100 @@ def test_node_contract_and_whole_pack_registration(monkeypatch):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")
-def test_cuda_input_retains_device_and_agrees_with_cpu():
+@pytest.mark.parametrize("mode", ["manual", "auto"])
+def test_cuda_input_retains_device_and_agrees_with_cpu(mode):
     source, edited = tensor(scene()), tensor(drift(scene()))
-    expected, _ = fix_pixel_drift(source, edited)
-    output, report = fix_pixel_drift(source.cuda(), edited.cuda())
+    expected, _ = fix_pixel_drift(source, edited, mode=mode)
+    output, report = fix_pixel_drift(source.cuda(), edited.cuda(), mode=mode)
     assert "corrected" in report and output.device == edited.cuda().device
     torch.testing.assert_close(output.cpu(), expected, atol=0.01, rtol=0.01)
+
+
+@pytest.mark.parametrize("size", [128, 256, 512])
+@pytest.mark.parametrize("shift", [(1, -1), (3, 2), (0.5, -0.75)])
+def test_auto_detects_small_shifts_and_keeps_local_edits(size, shift):
+    original = scene(size=size)
+    intended = original.copy()
+    intended[size // 3:size // 2, size // 3:size // 2] = (0.9, 0.1, 0.2)
+    edited = drift(intended, *shift)
+    output, report = MAIPixelDriftFix().run(tensor(original), tensor(edited), mode="auto")
+    assert "corrected" in report and "model=translation" in report
+    region = np.s_[8:size // 4, 8:-8]
+    before = np.abs(edited[region] - original[region]).mean()
+    after = np.abs(output[0].numpy()[region] - original[region]).mean()
+    assert after < before * 0.7
+    center = 5 * size // 12
+    np.testing.assert_allclose(output[0, center, center].numpy(), (0.9, 0.1, 0.2), atol=0.03)
+
+
+@pytest.mark.parametrize("kind", ["unrelated", "logo", "patches", "flat", "aligned", "large_shift", "moving_object"])
+def test_auto_skips_unreliable_or_already_aligned_pairs_exactly(kind):
+    original = scene()
+    edited = scene(78)
+    if kind == "logo":
+        edited[10:100, 10:100] = original[10:100, 10:100]
+        edited = drift(edited)
+    elif kind == "patches":
+        for y in (12, 192):
+            for x in (12, 192):
+                edited[y:y + 40, x:x + 40] = original[y:y + 40, x:x + 40]
+        edited = drift(edited)
+    elif kind == "flat":
+        original[:] = 0.2
+        edited[:] = 0.7
+    elif kind in ("aligned", "moving_object"):
+        edited = original.copy()
+        if kind == "moving_object":
+            edited[80:160, 95:175] = original[80:160, 80:160]
+        else:
+            edited[95:145, 95:145] = 0.9
+    elif kind == "large_shift":
+        edited = drift(original, dx=30, dy=0)
+    candidate = tensor(edited)
+    output, report = fix_pixel_drift(tensor(original), candidate, mode="auto")
+    assert torch.equal(output, candidate)
+    assert "corrected" not in report
+
+
+def test_auto_uses_perspective_only_when_uniform_shift_cannot_explain_motion():
+    original = scene()
+    matrix = np.float64([[1.015, 0.008, -3], [-0.004, 0.99, 4], [0.00002, -0.00003, 1]])
+    edited = cv2.warpPerspective(original, matrix, (256, 256), borderMode=cv2.BORDER_REPLICATE)
+    output, report = fix_pixel_drift(tensor(original), tensor(edited), mode="auto")
+    assert "corrected" in report and "model=perspective" in report
+    region = np.s_[16:-16, 16:-16]
+    assert np.abs(output[0].numpy()[region] - original[region]).mean() < np.abs(edited[region] - original[region]).mean() * 0.5
+
+
+def test_auto_ignores_manual_controls_and_legacy_calls_keep_manual_behavior():
+    source, edited = tensor(scene()), tensor(drift(scene()))
+    automatic = fix_pixel_drift(source, edited, mode="auto")
+    ignored = fix_pixel_drift(source, edited, min_similarity=float("nan"), max_drift=0, mode="auto")
+    assert torch.equal(automatic[0], ignored[0]) and automatic[1] == ignored[1]
+    manual = fix_pixel_drift(source, edited, mode="manual")
+    legacy = MAIPixelDriftFix().run(source, edited)
+    assert torch.equal(manual[0], legacy[0]) and manual[1] == legacy[1]
+    assert MAIPixelDriftFix.INPUT_TYPES()["optional"]["mode"][1]["default"] == "auto"
+    with pytest.raises(ValueError, match="Unknown pixel drift mode"):
+        fix_pixel_drift(source, edited, mode="unknown")
+
+
+def test_auto_high_resolution_mixed_batch_and_color_change():
+    original = cv2.resize(scene(), (1280, 1152))
+    edited = tensor(drift(original * 0.8 + 0.1, dx=10, dy=-6))
+    unrelated = tensor(cv2.resize(scene(79), (1280, 1152)))
+    batch = torch.cat((edited, unrelated))
+    output, report = fix_pixel_drift(tensor(original), batch, mode="auto")
+    assert "Image 1: corrected" in report and "model=translation" in report
+    assert "Image 2: corrected" not in report and torch.equal(output[1], batch[1])
+    expected = original * 0.8 + 0.1
+    assert np.abs(output[0, 40:-40, 40:-40].numpy() - expected[40:-40, 40:-40]).mean() < 0.02
+
+
+def test_auto_frontend_visibility_and_saved_workflows():
+    executable = shutil.which("node")
+    if executable is None:
+        pytest.skip("Node.js unavailable for frontend tests")
+    script = Path(__file__).with_name("pixel_drift_fix_frontend.mjs")
+    result = subprocess.run([executable, str(script)], capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stdout + result.stderr

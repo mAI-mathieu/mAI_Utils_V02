@@ -25,7 +25,15 @@ class MAIPixelDriftFix:
                     "tooltip": "Maximum corner movement as a fraction of image width/height. Rejects large reframing and extreme transforms.",
                 }),
             },
+            "optional": {
+                "mode": (["auto", "manual"], {
+                    "default": "auto",
+                    "tooltip": "Auto detects small shifts and chooses alignment checks per pair. Manual uses the two tuning controls.",
+                }),
+            },
         }
 
-    def run(self, source_image, edited_image, min_similarity=0.60, max_drift=0.15):
-        return fix_pixel_drift(source_image, edited_image, min_similarity, max_drift)
+    def run(self, source_image, edited_image, min_similarity=0.60, max_drift=0.15,
+            mode="manual"):
+        # Calls from workflows saved before mode existed retain their behavior.
+        return fix_pixel_drift(source_image, edited_image, min_similarity, max_drift, mode)
