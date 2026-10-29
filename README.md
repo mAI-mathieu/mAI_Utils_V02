@@ -358,8 +358,9 @@ Controls apply in this order:
 | `strength` | 1 | 0–1 blend between original and processed color. |
 | `device` | auto | `auto`, `gpu`, or `cpu`. |
 
-Detail controls are optional and appended after the original widgets, keeping
-existing saved widget values, input names and output order intact. Missing new
+The preset selector appears first. The frontend preserves the original saved
+widget order when loading/saving, keeping existing values, input names and
+output order intact. Detail controls remain optional in Python. Missing new
 controls retain the original processing, including RGB sharpening at a 1-pixel
 spread. New nodes also default to `preset=Manual` and neutral effects.
 
@@ -393,6 +394,13 @@ blur disabled. This preset overrides those sliders, including tone/color/blur;
 `strength`, `detail_scale`, `enabled`, `device` and `effect_mask` still apply.
 Switch to Manual to customize the full recipe. All overrides happen in Python,
 so API execution works without a frontend extension.
+The frontend hides overridden widgets in this preset, leaving `preset`,
+`enabled`, `strength`, `detail_scale` and `device` visible. Manual restores all
+controls and their values. The optional effect-mask socket remains available;
+converted/connected controls retain their sockets. When preset is connected,
+all controls remain accessible because its value is only known at execution.
+Without the frontend extension, all controls remain visible in their original
+order and backend processing works as before.
 
 Suggested workflow: **Upscale using another node → mAI image post effects →
 VAE Encode → low-denoise sampler → VAE Decode**. Start with the refinement
@@ -440,6 +448,8 @@ strength 0 versus 0.5–1 using the same sampler seed/settings, and judge the fi
 decoded image. Connect a mask to check black protection, then save/reload an
 older workflow to confirm original widget values are retained.
 Automated tests: `python -m pytest tests/test_image_post_effects.py`.
+Frontend ordering, visibility and save/reload checks:
+`node tests/image_post_effects_frontend.mjs`.
 
 ## mAI image blur
 
