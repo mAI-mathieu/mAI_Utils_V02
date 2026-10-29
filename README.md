@@ -366,7 +366,7 @@ spread. New nodes also default to `preset=Manual` and neutral effects.
 
 | Optional input | Default | Behavior |
 | --- | --- | --- |
-| `preset` | Manual | Manual uses all sliders; Prepare for refinement uses the recipe below. |
+| `preset` | Manual | Manual uses all sliders; Prepare for refinement offers Low, Medium and High recipes below. |
 | `texture` | 0 | 0–2 fine detail contrast between Gaussian spreads of 0.7 and 2 pixels. |
 | `clarity` | 0 | 0–1 medium detail contrast using an 8-pixel Gaussian spread. |
 | `detail_scale` | 1 | 0.25–4 multiplier for texture, clarity and sharpening spreads in output pixels. |
@@ -386,15 +386,26 @@ applied after processing, so surrounding pixels can influence filtered pixels
 inside it; outside black areas remain exact. An absent mask applies effects
 everywhere. Alpha is always preserved separately.
 
-**Prepare for refinement** is intended for an image already resized by another
-node, before VAE encoding and a low-denoise pass. It uses `texture=0.20`,
-`clarity=0.12`, `sharpen=0.25`, `sharpen_radius=0.8`, `detail_threshold=0.01`,
-`halo_suppression=0.8` and `luminance_only=true`, with neutral tone/color and
-blur disabled. This preset overrides those sliders, including tone/color/blur;
+**Prepare for refinement - Low / Medium / High** prepare an image already
+resized by another node, before VAE encoding and a low-denoise pass.
+
+| Level | Texture | Clarity | Sharpen | Detail threshold | Halo suppression |
+| --- | --- | --- | --- | --- | --- |
+| Low | 0.20 | 0.12 | 0.25 | 0.010 | 0.80 |
+| Medium | 0.45 | 0.25 | 0.50 | 0.007 | 0.75 |
+| High | 0.80 | 0.40 | 0.85 | 0.005 | 0.65 |
+
+Low is exactly the original recipe. Old saved workflows and API calls using
+`Prepare for refinement` still execute Low; the frontend updates that label to
+`Prepare for refinement - Low` when loaded. All levels use `sharpen_radius=0.8`,
+`luminance_only=true`, neutral tone/color and no blur. Medium and High increase
+detail gain, lower the noise threshold, and relax halo suppression; they can
+also amplify more noise and edge artifacts. These presets override the
+individual sliders, including tone/color/blur;
 `strength`, `detail_scale`, `enabled`, `device` and `effect_mask` still apply.
 Switch to Manual to customize the full recipe. All overrides happen in Python,
 so API execution works without a frontend extension.
-The frontend hides overridden widgets in this preset, leaving `preset`,
+The frontend hides overridden widgets in all three presets, leaving `preset`,
 `enabled`, `strength`, `detail_scale` and `device` visible. Manual restores all
 controls and their values. The optional effect-mask socket remains available;
 converted/connected controls retain their sockets. When preset is connected,
@@ -403,8 +414,9 @@ Without the frontend extension, all controls remain visible in their original
 order and backend processing works as before.
 
 Suggested workflow: **Upscale using another node → mAI image post effects →
-VAE Encode → low-denoise sampler → VAE Decode**. Start with the refinement
-preset and `detail_scale=1`. The node does not know the original upscale factor:
+VAE Encode → low-denoise sampler → VAE Decode**. Start with Low or Medium
+and `detail_scale=1`, then compare High if more definition is needed.
+The node does not know the original upscale factor:
 increase scale only when features need a wider processing radius. A value of 2
 doubles the filter spreads; it does not resize the image. Strong upscaler
 sharpening may need lower strength rather than a larger radius. In Manual,
@@ -443,7 +455,7 @@ Test in ComfyUI: restart and refresh, add **mAI image post effects**, then conne
 **Load Image → mAI image post effects → Preview Image**. Queue defaults to verify
 an unchanged image. Try `contrast=1.2`, `lightness=0.05`, and `blur=2` individually;
 compare `auto` and `cpu`, then test `enabled=false`, a batch, and save/reload.
-For refinement, choose **Prepare for refinement** after your upscaler, compare
+For refinement, compare **Prepare for refinement - Low / Medium / High** after your upscaler, using
 strength 0 versus 0.5–1 using the same sampler seed/settings, and judge the final
 decoded image. Connect a mask to check black protection, then save/reload an
 older workflow to confirm original widget values are retained.

@@ -16,7 +16,7 @@ import nodes.image_post_effects as node_module
 from nodes.image_post_effects import MAIImagePostEffects, resolve_post_effects_device
 from utils.image_blur import blur_image
 from utils.image_post_effects import (
-    DETAIL_CONTROLS, POST_EFFECT_CONTROLS, apply_image_post_effects, validate_post_effects,
+    DETAIL_CONTROLS, POST_EFFECT_CONTROLS, POST_EFFECT_PRESETS, apply_image_post_effects, validate_post_effects,
 )
 
 
@@ -396,19 +396,57 @@ def test_detail_scale_multiplies_sharpening_radius_in_output_pixels():
     assert broad[0, 3, 12, 0] < narrow[0, 3, 12, 0]
 
 
-def test_refinement_preset_is_reproducible_and_honors_strength_and_detail_scale():
+@pytest.mark.parametrize("preset,texture,clarity,sharpen,threshold,halo", [
+    ("Prepare for refinement", 0.2, 0.12, 0.25, 0.01, 0.8),
+    ("Prepare for refinement - Low", 0.2, 0.12, 0.25, 0.01, 0.8),
+    ("Prepare for refinement - Medium", 0.45, 0.25, 0.5, 0.007, 0.75),
+    ("Prepare for refinement - High", 0.8, 0.4, 0.85, 0.005, 0.65),
+])
+def test_refinement_preset_is_reproducible_and_honors_strength_and_detail_scale(
+    preset, texture, clarity, sharpen, threshold, halo,
+):
     image = torch.rand(2, 13, 17, 4)
-    actual = apply_image_post_effects(image, preset="Prepare for refinement", strength=0.7, detail_scale=2)
-    expected = apply_image_post_effects(image, texture=0.2, clarity=0.12, sharpen=0.25,
-                                        sharpen_radius=0.8, detail_threshold=0.01,
-                                        halo_suppression=0.8, luminance_only=True,
+    actual = apply_image_post_effects(image, preset=preset, strength=0.7, detail_scale=2)
+    expected = apply_image_post_effects(image, texture=texture, clarity=clarity, sharpen=sharpen,
+                                        sharpen_radius=0.8, detail_threshold=threshold,
+                                        halo_suppression=halo, luminance_only=True,
                                         strength=0.7, detail_scale=2)
     torch.testing.assert_close(actual, expected)
-    overridden = apply_image_post_effects(image, preset="Prepare for refinement", exposure=3, blur=5,
+    overridden = apply_image_post_effects(image, preset=preset, exposure=3, blur=5,
                                           texture=2, saturation=0, strength=0.7, detail_scale=2)
     torch.testing.assert_close(overridden, expected)
     assert torch.equal(actual[..., 3], image[..., 3])
-    assert apply_image_post_effects(image, preset="Prepare for refinement", strength=0) is image
+    assert apply_image_post_effects(image, preset=preset, strength=0) is image
+
+
+def test_three_refinement_levels_and_legacy_label_pass_comfy_validation():
+    assert POST_EFFECT_PRESETS == (
+        "Manual", "Prepare for refinement - Low", "Prepare for refinement - Medium", "Prepare for refinement - High",
+    )
+    choices, options = MAIImagePostEffects.INPUT_TYPES()["optional"]["preset"]
+    assert choices == list(POST_EFFECT_PRESETS) and options["default"] == "Manual"
+    for preset in (*POST_EFFECT_PRESETS, "Prepare for refinement"):
+        assert MAIImagePostEffects.VALIDATE_INPUTS(preset=preset) is True
+    assert MAIImagePostEffects.VALIDATE_INPUTS(preset="Unknown") == "Unknown post effects preset: Unknown"
+    image = torch.rand(1, 17, 19, 4)
+    assert torch.equal(apply_image_post_effects(image, preset="Prepare for refinement"),
+                       apply_image_post_effects(image, preset="Prepare for refinement - Low"))
+
+
+def test_medium_and_high_produce_progressively_more_detail_with_mask_protection():
+    coordinate = torch.arange(65, dtype=torch.float64)
+    wave = 0.5 + 0.08 * torch.sin(coordinate * (2 * math.pi / 12))
+    image = wave.reshape(1, 1, 65, 1).expand(1, 9, -1, 4).clone()
+    mask = torch.ones(9, 65, dtype=torch.float64)
+    mask[:2] = 0
+    differences = []
+    for preset in POST_EFFECT_PRESETS[1:]:
+        result = apply_image_post_effects(image, preset=preset, effect_mask=mask)
+        differences.append((result[:, 2:, :, :3] - image[:, 2:, :, :3]).square().mean().sqrt().item())
+        assert torch.equal(result[:, :2], image[:, :2])
+        assert torch.equal(result[..., 3], image[..., 3])
+        assert result.shape == image.shape and result.dtype == image.dtype
+    assert 0 < differences[0] < differences[1] < differences[2]
 
 
 @pytest.mark.parametrize("mask_shape", ["hw", "singleton", "batch"])
@@ -475,10 +513,11 @@ def test_refinement_preserves_dtype_shape_alpha_and_tiny_images(channels, dtype)
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32, torch.float64])
-def test_refinement_mask_and_detail_controls_match_real_cuda(dtype):
+@pytest.mark.parametrize("preset", POST_EFFECT_PRESETS[1:])
+def test_refinement_mask_and_detail_controls_match_real_cuda(dtype, preset):
     image = torch.rand(2, 23, 29, 4).to(dtype)
     mask = torch.linspace(0, 1, 29).expand(23, -1).to(dtype)
-    settings = dict(preset="Prepare for refinement", strength=0.7, detail_scale=1.5)
+    settings = dict(preset=preset, strength=0.7, detail_scale=1.5)
     expected = apply_image_post_effects(image, effect_mask=mask, **settings)
     for index in range(torch.cuda.device_count()):
         device = torch.device("cuda", index)
@@ -492,7 +531,8 @@ def test_refinement_mask_and_detail_controls_match_real_cuda(dtype):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")
-def test_refinement_fallback_keeps_gpu_mask_and_preset_settings(monkeypatch):
+@pytest.mark.parametrize("preset", POST_EFFECT_PRESETS[1:])
+def test_refinement_fallback_keeps_gpu_mask_and_preset_settings(monkeypatch, preset):
     image = torch.rand(2, 17, 19, 4, device="cuda", dtype=torch.float16)
     mask = torch.rand(17, 19, device="cuda")
     mask[:4] = 0
@@ -506,9 +546,9 @@ def test_refinement_fallback_keeps_gpu_mask_and_preset_settings(monkeypatch):
         return real_apply(image, **kwargs)
     monkeypatch.setattr(node_module, "apply_image_post_effects", fail_gpu)
     with pytest.warns(RuntimeWarning, match="retrying on CPU"):
-        actual, = MAIImagePostEffects().run(image, preset="Prepare for refinement", effect_mask=mask,
+        actual, = MAIImagePostEffects().run(image, preset=preset, effect_mask=mask,
                                            detail_scale=2, strength=0.8)
-    expected = real_apply(image.cpu(), preset="Prepare for refinement", effect_mask=mask.cpu(),
+    expected = real_apply(image.cpu(), preset=preset, effect_mask=mask.cpu(),
                            detail_scale=2, strength=0.8)
     assert len(calls) == 2 and actual.device.type == "cpu"
     torch.testing.assert_close(actual, expected)

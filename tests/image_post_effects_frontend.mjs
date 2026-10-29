@@ -80,7 +80,7 @@ assert.ok(node.widgets.every((item) => !item.hidden));
 const fullHeight = node.size[1];
 
 const preset = widget("preset");
-preset.value = "Prepare for refinement";
+preset.value = "Prepare for refinement - Low";
 assert.equal(preset.callback(preset.value), "callback");
 assert.equal(preset.callbackCalls, 1);
 for (const item of node.widgets) {
@@ -91,7 +91,7 @@ assert.equal(node.size[0], 420);
 assert.equal(JSON.stringify([node.inputs, node.outputs]), slots);
 const saved = node.serialize();
 assert.deepEqual(saved.widgets_values, names.map((name) => widget(name).value));
-assert.equal(saved.widgets_values[10], "Prepare for refinement");
+assert.equal(saved.widgets_values[10], "Prepare for refinement - Low");
 assert.equal(node.widgets[0].name, "preset");
 
 // Save/load and repeated loads retain every manual value, even when hidden.
@@ -114,6 +114,31 @@ widget("preset", restored).callback("Manual");
 assert.ok(restored.widgets.every((item) => !item.hidden));
 assert.equal(widget("texture", restored).value, 0.6);
 
+// Every refinement variant hides the same overridden controls and round-trips.
+for (const level of ["Low", "Medium", "High"]) {
+    const value = `Prepare for refinement - ${level}`;
+    widget("preset", restored).value = value;
+    widget("preset", restored).callback(value);
+    for (const item of restored.widgets) {
+        assert.equal(Boolean(item.hidden), !visibleInPreset.has(item.name), `${level}: ${item.name}`);
+    }
+    const settings = restored.serialize();
+    restored.configure(settings);
+    await Promise.resolve();
+    assert.equal(widget("preset", restored).value, value);
+    assert.deepEqual(restored.serialize(), settings);
+}
+
+// The original preset label upgrades to Low with the same recipe and values.
+const oldSettings = { widgets_values: [...saved.widgets_values] };
+oldSettings.widgets_values[10] = "Prepare for refinement";
+restored.configure(oldSettings);
+await Promise.resolve();
+assert.equal(widget("preset", restored).value, "Prepare for refinement - Low");
+assert.equal(widget("texture", restored).value, 0.6);
+assert.deepEqual(restored.serialize(), saved);
+assert.equal(oldSettings.widgets_values[10], "Prepare for refinement");
+
 // The oldest workflows have no appended detail/preset values at all.
 const legacy = new Node();
 legacy.onNodeCreated();
@@ -129,7 +154,7 @@ assert.ok(legacy.widgets.every((item) => !item.hidden));
 // Canonical saved arrays also load correctly with the extension unavailable.
 const bare = new BaseNode();
 bare.configure(saved);
-assert.equal(widget("preset", bare).value, "Prepare for refinement");
+assert.equal(widget("preset", bare).value, "Prepare for refinement - Low");
 assert.equal(widget("contrast", bare).value, 1.4);
 
 // Connected presets are unknown until execution, so leave all controls available.

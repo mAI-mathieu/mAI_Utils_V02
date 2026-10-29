@@ -31,7 +31,30 @@ DETAIL_CONTROLS = {
     "halo_suppression": (0.0, 0.0, 1.0, 0.01, "Limit detail enhancement to nearby brightness/color extrema. 0 preserves legacy sharpening; 1 fully limits overshoot."),
 }
 
-POST_EFFECT_PRESETS = ("Manual", "Prepare for refinement")
+REFINEMENT_PRESETS = {
+    "Prepare for refinement - Low": {
+        "texture": 0.2, "clarity": 0.12, "sharpen": 0.25,
+        "detail_threshold": 0.01, "halo_suppression": 0.8,
+    },
+    "Prepare for refinement - Medium": {
+        "texture": 0.45, "clarity": 0.25, "sharpen": 0.5,
+        "detail_threshold": 0.007, "halo_suppression": 0.75,
+    },
+    "Prepare for refinement - High": {
+        "texture": 0.8, "clarity": 0.4, "sharpen": 0.85,
+        "detail_threshold": 0.005, "halo_suppression": 0.65,
+    },
+}
+POST_EFFECT_PRESETS = ("Manual", *REFINEMENT_PRESETS)
+
+
+def normalize_post_effects_preset(preset):
+    # Keep API calls and saved workflows using the original label compatible.
+    if preset == "Prepare for refinement":
+        return "Prepare for refinement - Low"
+    if preset not in POST_EFFECT_PRESETS:
+        raise ValueError(f"Unknown post effects preset: {preset}")
+    return preset
 
 
 def prepare_effect_mask(mask, image_shape):
@@ -63,8 +86,7 @@ def validate_post_effects(image, enabled=True, preset="Manual", luminance_only=F
         raise ValueError("enabled must be a boolean")
     if not isinstance(luminance_only, bool):
         raise ValueError("luminance_only must be a boolean")
-    if preset not in POST_EFFECT_PRESETS:
-        raise ValueError(f"Unknown post effects preset: {preset}")
+    preset = normalize_post_effects_preset(preset)
     specifications = {**POST_EFFECT_CONTROLS, **DETAIL_CONTROLS}
     unknown = controls.keys() - specifications.keys()
     if unknown:
@@ -79,12 +101,11 @@ def validate_post_effects(image, enabled=True, preset="Manual", luminance_only=F
             raise ValueError(f"{name} must be a finite number between {minimum} and {maximum}")
         settings[name] = float(value)
     settings["luminance_only"] = luminance_only
-    if preset == "Prepare for refinement":
+    if preset in REFINEMENT_PRESETS:
         # A predictable base before a low-denoise pass. Strength and detail_scale
         # remain user-controlled; the preset never changes resolution itself.
         settings.update({name: spec[0] for name, spec in POST_EFFECT_CONTROLS.items() if name != "strength"})
-        settings.update(texture=0.2, clarity=0.12, sharpen=0.25, sharpen_radius=0.8,
-                        detail_threshold=0.01, halo_suppression=0.8, luminance_only=True)
+        settings.update(sharpen_radius=0.8, luminance_only=True, **REFINEMENT_PRESETS[preset])
     return settings
 
 

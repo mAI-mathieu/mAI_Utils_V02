@@ -1,6 +1,9 @@
 import { app } from "../../../scripts/app.js";
 
 const presetControls = new Set(["preset", "enabled", "strength", "detail_scale", "device"]);
+const refinementPresets = new Set([
+    "Prepare for refinement - Low", "Prepare for refinement - Medium", "Prepare for refinement - High",
+]);
 const hiddenStates = new WeakMap();
 const boundPresets = new WeakSet();
 const storingNodes = new WeakSet();
@@ -20,7 +23,8 @@ function updateVisibility(node) {
     if (storingNodes.has(node)) return;
     movePresetFirst(node);
     const preset = node.widgets?.find((widget) => widget.name === "preset");
-    const refinement = preset?.value === "Prepare for refinement" && !isConnected(node, "preset");
+    if (preset?.value === "Prepare for refinement") preset.value = "Prepare for refinement - Low";
+    const refinement = refinementPresets.has(preset?.value) && !isConnected(node, "preset");
     for (const widget of node.widgets ?? []) {
         if (presetControls.has(widget.name)) continue;
         // Keep converted controls and all input sockets owned by the frontend.

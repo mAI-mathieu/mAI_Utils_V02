@@ -8,12 +8,12 @@ import torch
 try:
     from ..utils.image_post_effects import (
         DETAIL_CONTROLS, POST_EFFECT_CONTROLS, POST_EFFECT_PRESETS, apply_image_post_effects,
-        post_effects_bypassed, prepare_effect_mask, validate_post_effects,
+        normalize_post_effects_preset, post_effects_bypassed, prepare_effect_mask, validate_post_effects,
     )
 except ImportError:
     from utils.image_post_effects import (
         DETAIL_CONTROLS, POST_EFFECT_CONTROLS, POST_EFFECT_PRESETS, apply_image_post_effects,
-        post_effects_bypassed, prepare_effect_mask, validate_post_effects,
+        normalize_post_effects_preset, post_effects_bypassed, prepare_effect_mask, validate_post_effects,
     )
 
 
@@ -58,7 +58,7 @@ class MAIImagePostEffects:
     RETURN_NAMES = ("image",)
     DESCRIPTION = (
         "Tone, color, blur, texture, clarity and controlled sharpening. Prepare for refinement "
-        "adds restrained luminance detail before VAE encoding and low-denoise sampling, including after upscaling. "
+        "offers Low, Medium and High luminance detail before VAE encoding and low-denoise sampling, including after upscaling. "
         "Defaults preserve the image exactly. Auto uses ComfyUI's selected CUDA GPU "
         "and retries hardware failures on CPU. Alpha stays unchanged."
     )
@@ -83,13 +83,22 @@ class MAIImagePostEffects:
                        "tooltip": "Auto accelerates with CUDA and falls back to CPU. GPU requires CUDA. CPU forces CPU output."}),
         }, "optional": {
             "preset": (list(POST_EFFECT_PRESETS), {"default": "Manual", "tooltip":
-                       "Prepare for refinement overrides tone/color/blur and detail controls with gentle defaults. Strength, detail_scale, enabled and mask still apply. Manual uses all sliders."}),
+                       "Refinement Low is the original recipe; Medium and High increase detail enhancement. Presets override tone/color/blur and detail sliders. Strength, detail_scale, enabled and mask still apply."}),
             **detail_controls,
             "luminance_only": ("BOOLEAN", {"default": False, "tooltip":
-                               "Process texture, clarity and sharpening in luminance, with gamut protection. The refinement preset enables this automatically."}),
+                               "Process texture, clarity and sharpening in luminance, with gamut protection. All refinement presets enable this automatically."}),
             "effect_mask": ("MASK", {"tooltip":
                             "Optional image-size effect mask. Black keeps original pixels exactly, white applies all effects. One mask broadcasts across the batch."}),
         }}
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, preset="Manual"):
+        # Accept the released label without adding a duplicate dropdown entry.
+        try:
+            normalize_post_effects_preset(preset)
+        except ValueError as exc:
+            return str(exc)
+        return True
 
     def run(self, image, enabled=True, device="auto", effect_mask=None, preset="Manual",
             luminance_only=False, **controls):
