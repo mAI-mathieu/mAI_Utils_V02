@@ -11,7 +11,11 @@ import pytest
 import torch
 
 from nodes.video_compare import MAIVideoCompare
-from utils.video_compare import compare_batches, compare_settings, preview_dimensions, write_compare_frames
+from utils.video_compare import (
+    compare_batches, compare_settings, prepare_compare_pixels, preview_dimensions,
+    resolve_compare_device, write_compare_frames,
+)
+import utils.video_compare as compare_module
 
 
 @pytest.mark.parametrize("representation", ["batch", "chunks", "frames", "wrapped"])
@@ -124,3 +128,95 @@ def test_frontend_player():
         pytest.skip("Node.js is unavailable")
     result = subprocess.run([node, str(Path(__file__).with_name("video_compare_frontend.mjs"))], capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_cpu_mode_does_not_query_cuda(tmp_path, monkeypatch):
+    monkeypatch.setitem(sys.modules, "comfy.model_management", SimpleNamespace(get_torch_device=lambda: "cpu"))
+
+    def forbidden():
+        raise AssertionError("CPU mode queried CUDA")
+
+    monkeypatch.setattr(torch.cuda, "is_available", forbidden)
+    assert resolve_compare_device("cpu") == torch.device("cpu")
+    write_compare_frames([torch.ones(1, 80, 160, 3)], tmp_path, "a", 1, 64)
+    assert (tmp_path / "a_000000.png").is_file()
+
+
+def test_cpu_inputs_use_comfyui_selected_gpu(monkeypatch):
+    monkeypatch.setitem(sys.modules, "comfy.model_management", SimpleNamespace(get_torch_device=lambda: "cuda:2"))
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    assert resolve_compare_device("cpu") == torch.device("cuda:2")
+
+
+def test_unavailable_cuda_uses_cpu(monkeypatch):
+    monkeypatch.delitem(sys.modules, "comfy.model_management", raising=False)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    assert resolve_compare_device("cpu") == torch.device("cpu")
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_pixel_conversion_stays_on_compute_device_without_mutation(device):
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA unavailable")
+    source = torch.tensor([[[float("nan"), float("inf"), -1.0], [0.0, 0.5, 1.0]]])
+    result = prepare_compare_pixels(source, device)
+    assert result.device.type == device
+    assert result.dtype == torch.uint8
+    assert result.cpu().tolist() == [[[0, 255, 0], [0, 128, 255]]]
+    assert torch.isnan(source[0, 0, 0]) and source[0, 1, 1] == 0.5
+
+
+@pytest.mark.parametrize("source_device", ["cpu", "cuda"])
+@pytest.mark.parametrize("channels", [1, 3, 4])
+def test_real_cuda_resize_and_png_match_cpu(tmp_path, monkeypatch, source_device, channels):
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA unavailable")
+    # Both a CPU loader and an upstream GPU tensor must use CUDA preparation.
+    source = torch.rand(2, 80, 160, channels, device=source_device)
+    original = source.clone()
+    seen = []
+    prepare = compare_module.prepare_compare_pixels
+    resize = compare_module.resize_separable
+
+    def observed_resize(pixels, tables):
+        seen.append(("resize", pixels.device.type))
+        return resize(pixels, tables)
+
+    def observed_prepare(*args):
+        result = prepare(*args)
+        seen.append(("quantize", result.device.type))
+        assert result.dtype == torch.uint8
+        return result
+
+    monkeypatch.setattr(compare_module, "resize_separable", observed_resize)
+    monkeypatch.setattr(compare_module, "prepare_compare_pixels", observed_prepare)
+    monkeypatch.setitem(sys.modules, "comfy.model_management", SimpleNamespace(get_torch_device=lambda: "cuda:0"))
+    write_compare_frames([source], tmp_path, "gpu", 2, 64)
+    assert seen == [("resize", "cuda"), ("quantize", "cuda")] * 2
+    write_compare_frames([source.cpu()], tmp_path, "cpu", 2, 64, compute_device="cpu")
+    for index in range(2):
+        with Image.open(tmp_path / f"gpu_{index:06d}.png") as gpu, Image.open(tmp_path / f"cpu_{index:06d}.png") as cpu:
+            assert gpu.size == cpu.size == (64, 32)
+            gpu_bytes = torch.frombuffer(bytearray(gpu.tobytes()), dtype=torch.uint8).int()
+            cpu_bytes = torch.frombuffer(bytearray(cpu.tobytes()), dtype=torch.uint8).int()
+            differences = gpu_bytes - cpu_bytes
+            assert differences.abs().max() <= 1
+    torch.testing.assert_close(source, original)
+
+
+def test_cuda_errors_are_reported_and_partial_previews_removed(tmp_path, monkeypatch):
+    monkeypatch.setitem(sys.modules, "folder_paths", SimpleNamespace(get_temp_directory=lambda: str(tmp_path)))
+    monkeypatch.setitem(sys.modules, "comfy.model_management", SimpleNamespace(get_torch_device=lambda: "cuda:0"))
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    attempts = []
+
+    def fail(frame, device, tables):
+        attempts.append(device.type)
+        raise torch.cuda.OutOfMemoryError("CUDA out of memory")
+
+    monkeypatch.setattr(compare_module, "prepare_compare_pixels", fail)
+    frames = torch.zeros(1, 4, 4, 3)
+    with pytest.raises(torch.cuda.OutOfMemoryError, match="CUDA out of memory"):
+        MAIVideoCompare().run(frames, frames)
+    assert attempts == ["cuda"]
+    assert list(tmp_path.iterdir()) == []

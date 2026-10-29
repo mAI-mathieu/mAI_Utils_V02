@@ -8,6 +8,120 @@ function element(tag, style, text) {
     return result;
 }
 
+// Keep the current two frames in GPU textures. Moving the divider updates one
+// shader uniform rather than uploading images or compositing pixels on CPU.
+class GpuCompareRenderer {
+    constructor(canvas) {
+        this.gl = canvas.getContext("webgl", {
+            alpha: false, antialias: false, powerPreference: "high-performance",
+            failIfMajorPerformanceCaveat: true,
+        });
+        if (!this.gl) return;
+        const gl = this.gl;
+        const shader = (type, source) => {
+            const result = gl.createShader(type);
+            gl.shaderSource(result, source);
+            gl.compileShader(result);
+            if (!gl.getShaderParameter(result, gl.COMPILE_STATUS)) {
+                const message = gl.getShaderInfoLog(result);
+                gl.deleteShader(result);
+                throw new Error(`Video compare GPU shader failed: ${message}`);
+            }
+            return result;
+        };
+        const vertex = shader(gl.VERTEX_SHADER, `
+            attribute vec2 position;
+            varying vec2 uv;
+            void main() { uv = position * 0.5 + 0.5; gl_Position = vec4(position, 0.0, 1.0); }
+        `);
+        const fragment = shader(gl.FRAGMENT_SHADER, `
+            precision highp float;
+            varying vec2 uv;
+            uniform sampler2D imageA;
+            uniform sampler2D imageB;
+            uniform vec2 fitA;
+            uniform vec2 fitB;
+            uniform vec2 canvasSize;
+            uniform float reveal;
+            vec3 sampleFrame(sampler2D image, vec2 fit) {
+                vec3 background = vec3(8.0, 9.0, 11.0) / 255.0;
+                vec2 local = (uv - 0.5) / fit + 0.5;
+                if (any(lessThan(local, vec2(0.0))) || any(greaterThan(local, vec2(1.0)))) return background;
+                vec4 pixel = texture2D(image, local);
+                return mix(background, pixel.rgb, pixel.a);
+            }
+            void main() {
+                vec3 color = uv.x <= reveal ? sampleFrame(imageA, fitA) : sampleFrame(imageB, fitB);
+                vec2 distance = (uv - vec2(reveal, 0.5)) * canvasSize;
+                if (abs(distance.x) <= max(1.0, canvasSize.x / 800.0)
+                    || length(distance) <= max(5.0, canvasSize.x / 100.0)) color = vec3(1.0);
+                gl_FragColor = vec4(color, 1.0);
+            }
+        `);
+        this.program = gl.createProgram();
+        gl.attachShader(this.program, vertex);
+        gl.attachShader(this.program, fragment);
+        gl.linkProgram(this.program);
+        gl.deleteShader(vertex);
+        gl.deleteShader(fragment);
+        if (!gl.getProgramParameter(this.program, gl.LINK_STATUS)) {
+            const message = gl.getProgramInfoLog(this.program);
+            this.dispose();
+            throw new Error(`Video compare GPU program failed: ${message}`);
+        }
+        this.buffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+        this.position = gl.getAttribLocation(this.program, "position");
+        this.uniforms = Object.fromEntries(["imageA", "imageB", "fitA", "fitB", "canvasSize", "reveal"]
+            .map((name) => [name, gl.getUniformLocation(this.program, name)]));
+        this.textures = [gl.createTexture(), gl.createTexture()];
+        for (const texture of this.textures) {
+            gl.bindTexture(gl.TEXTURE_2D, texture);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        }
+    }
+
+    draw(canvas, pair, reveal) {
+        const gl = this.gl;
+        if (gl.isContextLost()) return;
+        gl.viewport(0, 0, canvas.width, canvas.height);
+        gl.clearColor(8 / 255, 9 / 255, 11 / 255, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        if (!pair) { this.pair = null; return; }
+        gl.useProgram(this.program);
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
+        gl.enableVertexAttribArray(this.position);
+        gl.vertexAttribPointer(this.position, 2, gl.FLOAT, false, 0, 0);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+        pair.forEach((image, index) => {
+            gl.activeTexture(gl.TEXTURE0 + index);
+            gl.bindTexture(gl.TEXTURE_2D, this.textures[index]);
+            if (this.pair !== pair) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+            const side = index === 0 ? "A" : "B";
+            gl.uniform1i(this.uniforms[`image${side}`], index);
+            const scale = Math.min(canvas.width / image.width, canvas.height / image.height);
+            gl.uniform2f(this.uniforms[`fit${side}`], image.width * scale / canvas.width, image.height * scale / canvas.height);
+        });
+        this.pair = pair;
+        gl.uniform2f(this.uniforms.canvasSize, canvas.width, canvas.height);
+        gl.uniform1f(this.uniforms.reveal, reveal);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+
+    dispose() {
+        if (!this.gl) return;
+        for (const texture of this.textures ?? []) this.gl.deleteTexture(texture);
+        if (this.buffer) this.gl.deleteBuffer(this.buffer);
+        if (this.program) this.gl.deleteProgram(this.program);
+        this.pair = null;
+    }
+}
+
 // One canvas commits both decoded images together. A single clock selects their
 // shared frame index, so buffering/slow browsers can skip pairs but never drift.
 export class VideoComparePlayer {
@@ -90,6 +204,17 @@ export class VideoComparePlayer {
                 this.playing ? this.pause() : this.play();
             }
         };
+        this.canvas.addEventListener("webglcontextlost", (event) => {
+            event.preventDefault();
+            this.pause();
+            this.message.textContent = "GPU player context lost; waiting for the browser to restore it.";
+        });
+        this.canvas.addEventListener("webglcontextrestored", () => {
+            this.renderer?.dispose();
+            this.renderer = undefined;
+            this.draw();
+            this.message.textContent = this.note ?? "Connect two IMAGE sequences and queue to compare.";
+        });
         this.visibilityHandler = () => { if (document.hidden) this.pause(); };
         document.addEventListener("visibilitychange", this.visibilityHandler);
     }
@@ -120,6 +245,8 @@ export class VideoComparePlayer {
             (a !== b ? ` · A: ${a}, B: ${b}; ends at shorter sequence` : "");
         this.message.textContent = "Loading comparison…";
         this.draw();
+        this.note += ` · ${data.preview_device?.startsWith("cuda") ? "CUDA" : "CPU"} previews` +
+            ` · ${this.renderer.gl ? "WebGL player" : "2D player (WebGL unavailable)"}`;
         this.showFrame(0);
     }
 
@@ -196,6 +323,11 @@ export class VideoComparePlayer {
     }
 
     draw() {
+        this.renderer ??= new GpuCompareRenderer(this.canvas);
+        if (this.renderer.gl) {
+            this.renderer.draw(this.canvas, this.pair, this.reveal);
+            return;
+        }
         const ctx = this.canvas.getContext("2d");
         const { width, height } = this.canvas;
         ctx.fillStyle = "#08090b";
@@ -261,6 +393,7 @@ export class VideoComparePlayer {
         this.disposed = true;
         this.clearCache();
         this.pair = null;
+        this.renderer?.dispose();
         document.removeEventListener("visibilitychange", this.visibilityHandler);
         this.root.remove();
     }

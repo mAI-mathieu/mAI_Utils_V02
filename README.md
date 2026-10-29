@@ -24,21 +24,34 @@ Both frames are displayed together after loading; slow playback may skip pairs.
 Images with different dimensions are centered and fitted into A's aspect ratio,
 preserving proportions with black letterboxing. Input tensors remain unchanged.
 
-Previews use temporary 8-bit PNGs (including alpha), with a bounded browser
-frame cache. No FFmpeg, codec, GPU, audio, or new dependency is required. Long
+Preview resizing (Lanczos), alpha handling, and conversion to 8-bit pixels run on
+ComfyUI's CUDA GPU by default, including for CPU input tensors. Only prepared
+preview pixels return to CPU for PNG compression and disk writes. Processing uses
+one frame at a time and reuses resize weights to bound GPU memory. CPU-only
+ComfyUI runs or unavailable CUDA use CPU. CUDA execution errors are reported;
+they do not silently switch processing to CPU.
+
+The browser uses WebGL textures and a shader for reveal compositing, uploading
+only when the frame pair changes. The status line identifies the preview device
+and player renderer. WebGL uses the browser's GPU, which may be different from
+the ComfyUI server's GPU; enable browser hardware acceleration. A browser without
+WebGL uses the 2D player. Playback pauses if the WebGL context is lost and can
+resume after restoration. Temporary PNGs (including alpha) and a bounded browser
+frame cache are used. No FFmpeg, codec, audio, or new dependency is required. Long
 clips or large preview sizes take disk space and preparation time; the comparison
 is intended for visual inspection, not original floating-point pixel analysis.
 This synchronizes by frame index, without motion matching, offset correction,
 or conversion between different source frame rates. Use matching source FPS and
 trim beforehand if needed. Preview files stay in ComfyUI temp until it is cleared;
 change a preview setting and queue again if an old preview becomes unavailable.
-Playback requires the frontend
-extension; backend preview preparation still works without JavaScript.
+Playback requires the frontend extension; backend preview preparation still
+works without JavaScript.
 
 Test in ComfyUI: restart and refresh the browser, add **mAI video compare**,
 connect two video loaders' IMAGE outputs, set their shared FPS, and queue.
 Check hover reveal during playback and pause, scrubbing, Loop on/off, and clips
-of different lengths/resolutions. Automated checks:
+of different lengths/resolutions. On a CUDA setup the status should show
+**CUDA previews · WebGL player**. Automated checks (CUDA cases skip on CPU hosts):
 `python -m pytest tests/test_video_compare.py` and
 `node tests/video_compare_frontend.mjs`.
 

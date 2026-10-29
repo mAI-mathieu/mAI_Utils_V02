@@ -2,15 +2,16 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 const draws = [];
+let webglContext = null;
 const context = new Proxy({}, { get(target, name) {
     return target[name] ?? ((...args) => { if (name === "drawImage") draws.push(args[0].src); });
 } });
 class Element {
-    constructor(tag) { this.tag = tag; this.style = {}; this.children = []; }
+    constructor(tag) { this.tag = tag; this.style = {}; this.children = []; this.events = new Map(); }
     append(...children) { this.children.push(...children); }
     setAttribute(name, value) { this[name] = value; }
-    addEventListener() {}
-    getContext() { return context; }
+    addEventListener(name, handler) { this.events.set(name, handler); }
+    getContext(type) { return type === "2d" ? context : webglContext; }
     getBoundingClientRect() { return { left: 0, width: 800, height: 450 }; }
     remove() { this.removed = true; }
 }
@@ -178,4 +179,47 @@ extension.onNodeOutputsUpdated({ "7": { video_compare: [{ ...data, subfolder: "h
 assert.equal(node.maiVideoCompare.pair, restoredPair);
 assert.equal(node.onRemoved(), "removed");
 assert.equal(listeners.size, 0);
-console.log("Synchronized pairs, delayed decoding, hover, seek, play/pause, loop, errors, bounded cache and cleanup passed.");
+
+// GPU rendering uploads each new pair once; hovering only changes uniforms.
+const gpuCalls = [];
+let resourceId = 0;
+webglContext = new Proxy({}, { get(target, name) {
+    if (typeof name === "string" && /^[A-Z_0-9]+$/.test(name)) return target[name] ??= ++resourceId;
+    return (...args) => {
+        gpuCalls.push([name, ...args]);
+        if (name.startsWith("create")) return { id: ++resourceId };
+        if (["getShaderParameter", "getProgramParameter"].includes(name)) return true;
+        if (name === "isContextLost") return false;
+        if (name === "getAttribLocation") return 0;
+        if (name === "getUniformLocation") return args[1];
+    };
+} });
+const gpuPlayer = new VideoComparePlayer({ properties: {} });
+gpuPlayer.setData({ ...data, preview_device: "cuda:0" });
+await settle();
+assert.match(gpuPlayer.message.textContent, /CUDA previews · WebGL player/);
+const calls = (name) => gpuCalls.filter((call) => call[0] === name);
+assert.equal(calls("texImage2D").length, 2);
+assert.match(calls("texImage2D")[0].at(-1).src, /a_000000/);
+assert.match(calls("texImage2D")[1].at(-1).src, /b_000000/);
+gpuPlayer.setReveal(0.3);
+gpuPlayer.setReveal(0.7);
+assert.equal(calls("texImage2D").length, 2);
+assert.equal(calls("uniform1f").at(-1)[2], 0.7);
+await gpuPlayer.showFrame(1);
+assert.equal(calls("texImage2D").length, 4);
+gpuPlayer.play();
+let prevented = false;
+gpuPlayer.canvas.events.get("webglcontextlost")({ preventDefault() { prevented = true; } });
+assert.equal(prevented, true);
+assert.equal(gpuPlayer.playing, false);
+assert.match(gpuPlayer.message.textContent, /GPU player context lost/);
+gpuPlayer.canvas.events.get("webglcontextrestored")();
+assert.equal(calls("deleteTexture").length, 2);
+assert.equal(calls("texImage2D").length, 6);
+gpuPlayer.dispose();
+assert.equal(calls("deleteTexture").length, 4);
+assert.equal(calls("deleteBuffer").length, 2);
+assert.equal(calls("deleteProgram").length, 2);
+assert.equal(listeners.size, 0);
+console.log("Synchronized playback, WebGL texture reuse and cleanup, context restoration, CPU fallback and player controls passed.");

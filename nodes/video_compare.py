@@ -6,9 +6,9 @@ import sys
 import tempfile
 
 try:
-    from ..utils.video_compare import compare_batches, compare_settings, write_compare_frames
+    from ..utils.video_compare import compare_batches, compare_settings, resolve_compare_device, write_compare_frames
 except ImportError:
-    from utils.video_compare import compare_batches, compare_settings, write_compare_frames
+    from utils.video_compare import compare_batches, compare_settings, resolve_compare_device, write_compare_frames
 
 
 class MAIVideoCompare:
@@ -20,6 +20,7 @@ class MAIVideoCompare:
     RETURN_NAMES = ()
     DESCRIPTION = (
         "Compare two frame sequences with synchronized play/pause, loop and hover reveal. "
+        "Preview resizing and pixel conversion use ComfyUI's CUDA GPU when available. "
         "Frame zero is aligned; playback ends at the shorter sequence. No audio or video export."
     )
 
@@ -51,6 +52,7 @@ class MAIVideoCompare:
         b = compare_batches(frames_b, "frames_b")
         counts = [sum(batch.shape[0] for batch in batches) for batches in (a, b)]
         count = min(counts)
+        compute_device = resolve_compare_device(a[0].device)
         base = Path(folder_paths.get_temp_directory())
         base.mkdir(parents=True, exist_ok=True)
         management = sys.modules.get("comfy.model_management")
@@ -67,7 +69,8 @@ class MAIVideoCompare:
         try:
             for prefix, batches in (("a", a), ("b", b)):
                 write_compare_frames(batches, ready, prefix, count, preview_max_size,
-                                     interrupt, (lambda: progress.update(1)) if progress else None)
+                                     interrupt, (lambda: progress.update(1)) if progress else None,
+                                     compute_device=compute_device)
             complete = True
         finally:
             if not complete:
@@ -76,4 +79,5 @@ class MAIVideoCompare:
         return {"ui": {"video_compare": [{
             "subfolder": ready.name, "frame_count": count, "source_counts": counts,
             "fps": float(fps), "width": width, "height": height,
+            "preview_device": str(compute_device),
         }]}, "result": ()}
