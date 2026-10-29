@@ -42,12 +42,16 @@ def resize_minimax_image(image, width, height, algorithm):
     method = "lanczos3" if algorithm == "lanczos" else algorithm
 
     def resize(device):
+        # The shared resizer also manages the source device's GPU cache. Move
+        # to CPU first so recovery never calls cleanup hooks on a failing GPU.
+        source = image.cpu() if device.type == "cpu" else image
         return resize_image_batch(
-            image, width, height, method=method,
+            source, width, height, method=method,
             antialias=algorithm == "lanczos", compute_device=device, chunk_size=1,
         )[0]
 
     compute_device = None
+    result = None
     try:
         compute_device = resolve_resize_device(image.device)
         result = resize(compute_device)
@@ -64,4 +68,5 @@ def resize_minimax_image(image, width, height, algorithm):
             RuntimeWarning, stacklevel=2,
         )
     # Retry outside the handler so failed GPU scratch allocations can be freed.
+    result = None
     return resize(torch.device("cpu"))

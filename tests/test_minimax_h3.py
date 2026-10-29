@@ -1,6 +1,3 @@
-import sys
-from types import ModuleType
-
 import pytest
 import torch
 
@@ -149,27 +146,21 @@ def test_node_exposes_float_megapixel_target():
     [({}, 1376), ({"multiple_of": 64}, 1344), ({"multiple_of": 1}, 1365)],
 )
 @pytest.mark.parametrize("algorithm", [None, *RESIZE_ALGORITHM_OPTIONS])
-def test_node_resizes_with_selected_comfyui_algorithm(
+def test_node_resizes_with_selected_algorithm(
     monkeypatch, kwargs, expected_width, algorithm
 ):
     calls = {}
-    comfy_module = ModuleType("comfy")
-    comfy_utils_module = ModuleType("comfy.utils")
-
-    def common_upscale(samples, width, height, method, crop):
-        calls.update(width=width, height=height, method=method, crop=crop)
+    def resize(samples, width, height, algorithm):
+        calls.update(width=width, height=height, method=algorithm)
         return torch.zeros(
             samples.shape[0],
-            samples.shape[1],
             height,
             width,
+            samples.shape[3],
             dtype=samples.dtype,
         )
 
-    comfy_utils_module.common_upscale = common_upscale
-    comfy_module.utils = comfy_utils_module
-    monkeypatch.setitem(sys.modules, "comfy", comfy_module)
-    monkeypatch.setitem(sys.modules, "comfy.utils", comfy_utils_module)
+    monkeypatch.setattr("nodes.prepare_image_for_minimax_h3.resize_minimax_image", resize)
 
     image = torch.rand(2, 108, 192, 3)
     options = dict(kwargs)
@@ -182,7 +173,6 @@ def test_node_resizes_with_selected_comfyui_algorithm(
         "width": expected_width,
         "height": 768,
         "method": algorithm or "lanczos",
-        "crop": "disabled",
     }
 
 
@@ -200,23 +190,17 @@ def test_node_short_side_mode_bypasses_invalid_megapixel_value(
     monkeypatch, kwargs, expected_width, expected_height, resize_mode
 ):
     calls = {}
-    comfy_module = ModuleType("comfy")
-    comfy_utils_module = ModuleType("comfy.utils")
-
-    def common_upscale(samples, width, height, method, crop):
-        calls.update(width=width, height=height, method=method, crop=crop)
+    def resize(samples, width, height, algorithm):
+        calls.update(width=width, height=height, method=algorithm)
         return torch.zeros(
             samples.shape[0],
-            samples.shape[1],
             height,
             width,
+            samples.shape[3],
             dtype=samples.dtype,
         )
 
-    comfy_utils_module.common_upscale = common_upscale
-    comfy_module.utils = comfy_utils_module
-    monkeypatch.setitem(sys.modules, "comfy", comfy_module)
-    monkeypatch.setitem(sys.modules, "comfy.utils", comfy_utils_module)
+    monkeypatch.setattr("nodes.prepare_image_for_minimax_h3.resize_minimax_image", resize)
 
     image = torch.rand(1, 821, 1379, 3)
     output, = MAIPrepareImageForMinimaxH3().prepare(
@@ -231,7 +215,6 @@ def test_node_short_side_mode_bypasses_invalid_megapixel_value(
         "width": expected_width,
         "height": expected_height,
         "method": kwargs.get("resize_algorithm", "lanczos"),
-        "crop": "disabled",
     }
 
 

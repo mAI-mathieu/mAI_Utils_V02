@@ -1737,7 +1737,7 @@ Known limitations:
 * Large target dimensions can require substantial image memory.
 * CPU recovery needs enough system RAM and readable input tensors; a broken CUDA context can prevent copying GPU inputs to CPU. Other accelerator backends use CPU.
 
-Testing: run `python -m pytest tests/test_minimax_h3.py`. In ComfyUI, restart and
+Testing: run `python -m pytest tests/test_minimax_h3.py tests/test_minimax_h3_resize.py`. In ComfyUI, restart and
 add or reload this node under `mAI / Image`. For a 1920 × 1080 input, choose
 `Short side`, set `short_side=777` and `multiple_of=1`, and verify a
 1381 × 777 output. Set `multiple_of=32` to get 1376 × 768. The single `image`
