@@ -14,6 +14,7 @@ from .nodes.image_blur import MAIImageBlur
 from .nodes.image_composite_masked import MAIImageCompositeMasked
 from .nodes.image_gate import MAIImageGate
 from .nodes.image_logic_check import MAIImageLogicCheck
+from .nodes.image_preserve_source import MAIImagePreserveSource
 from .nodes.int_to_nearest_multiple import MAIIntToNearestMultiple
 from .nodes.json_parser import MAIJsonParser
 from .nodes.krea2_image_conditioning import MAIKrea2ImageConditioning
@@ -67,6 +68,7 @@ NODE_CLASS_MAPPINGS = {
     "MAIImageCompositeMasked": MAIImageCompositeMasked,
     "MAIImageGate": MAIImageGate,
     "MAIImageLogicCheck": MAIImageLogicCheck,
+    "MAIImagePreserveSource": MAIImagePreserveSource,
     "MAIIntToNearestMultiple": MAIIntToNearestMultiple,
     "MAIJsonParser": MAIJsonParser,
     "MAIKrea2ImageConditioning": MAIKrea2ImageConditioning,
@@ -103,6 +105,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MAIImageCompositeMasked": "mAI image composite masked",
     "MAIImageGate": "mAI image gate",
     "MAIImageLogicCheck": "mAI Image Logic Check",
+    "MAIImagePreserveSource": "mAI image preserve source",
     "MAIIntToNearestMultiple": "mAI int to nearest multiple",
     "MAIJsonParser": "mAI JSON parser",
     "MAIKrea2ImageConditioning": "mAI Krea2 image conditioning",

@@ -5,6 +5,68 @@ ComfyUI custom node pack for small, reusable mAI utility nodes.
 Install this folder under ComfyUI's `custom_nodes` directory, then restart ComfyUI.
 The currently registered nodes are listed below.
 
+## mAI image preserve source
+
+Location: `mAI / Image`. Registered as `MAIImagePreserveSource`.
+Post-processes an image-model edit by keeping the original pixels wherever the
+change is small. Connect the image sent to your edit model to `original_image`
+and its decoded result to `edited_image`. Outputs, in order: `image` (IMAGE)
+and `change_mask` (MASK: black keeps original, white takes edited).
+
+Detection compares mean absolute RGB differences at two scales: raw pixels and
+Gaussian-blurred images. This helps reject small texture/decoder drift while
+retaining larger changes. It does not use another model or understand the prompt.
+
+Settings and defaults:
+
+* `difference_threshold`: 0.08 on normalized 0–1 RGB. Raise to preserve more
+  original content; lower if intended edits disappear.
+* `transition_width`: 0.04. Smoothstep from no edit at the threshold to full
+  edit at threshold + width (capped at 1). Zero gives a hard selection.
+* `comparison_blur`: 2.0 pixels, the Gaussian sigma for broad-change detection.
+  Zero uses only raw differences.
+* `detail_sensitivity`: 0.25, the weight of raw differences versus blurred
+  differences. Raise for small/thin edits; lower to ignore more texture drift.
+* `mask_expand`: 2 pixels, square expansion of the detected region.
+* `mask_blur`: 2.0 pixels, Gaussian sigma for feathering the selection.
+  Expansion/feathering intentionally include nearby low-difference pixels to
+  avoid harsh edges. Set both to zero for strict per-pixel selection.
+* `blend_mode`: `multiband` by default. `feather` uses ordinary soft blending;
+  `center_cut` uses a hard 0.5 cut; `content_aware_seam` finds a seam through
+  low-disagreement pixels within the gray mask band; `multiband` uses image
+  pyramids to blend fine and broad transitions at different scales;
+  `content_aware_seam_multiband` combines seam placement and pyramid blending.
+* `multiband_levels`: 5 (1–10), only used by multiband modes. More levels
+  affect broader transitions. Level 1 equals feather, or the hard seam in
+  the combined mode. Try the combined mode if multiband alone leaves a seam.
+* Optional `edit_mask`: limits where detected edits may appear. Black always
+  protects the original, even after expansion/feathering; white allows automatic
+  detection, gray attenuates it. Missing mask allows detection everywhere.
+
+Black output-mask pixels preserve the original exactly; white takes the edit
+exactly. Only gray pixels receive blending/seam corrections. The output mask
+shows the allowed transition band; content-aware modes choose a hard seam
+within it, so gray does not describe their final per-pixel opacity. No mode
+changes the original outside this mask or restores source detail inside a fully
+selected edit. Input images and masks are never modified.
+
+Limitations: images must already be aligned with matching resolution and RGB/
+RGBA channels. Resizing, cropping, camera shifts and large global color changes
+can trigger false detections. Subtle intended changes may be rejected, and
+large artifacts may be retained: inspect `change_mask` and tune the settings.
+Alpha does not drive detection; it follows the composite mask/seam. Singleton
+image/mask batches broadcast; other batch mismatches raise errors. Output keeps
+the original floating dtype and device; masks use float32 (float64 for a float64
+original). Uses existing PyTorch utilities; content-aware modes also require
+ComfyUI's SciPy and inherit the compositor's bounded CPU seam search.
+
+Test in ComfyUI: restart and refresh, add **mAI image preserve source**, connect
+an aligned source and edit, and preview `image`. Connect `change_mask` through
+**Convert Mask to Image** to another preview. Start with defaults, tune the
+threshold, then compare `multiband` with `content_aware_seam_multiband`. Try an
+optional edit mask and verify black areas stay exactly original. Automated tests:
+`python -m pytest --confcutdir=tests tests/test_image_preserve_source.py`.
+
 ## mAI image composite masked
 
 Location: `mAI / Image`. Registered as `MAIImageCompositeMasked`.
