@@ -21,7 +21,7 @@ def test_mask_stays_aligned_with_image_for_all_modes_and_methods(mode, method, c
     mask = torch.rand(3, 9, 13)
     image = mask.unsqueeze(-1).expand(-1, -1, -1, 3)
     before = mask.clone()
-    result, w, h, _, output_mask = MAIFastGPUResize().run(
+    result, w, h, _, output_mask, _ = MAIFastGPUResize().run(
         image, 8, 6, resize_mode=mode, method=method,
         multiple_of=4, chunk_size=chunk_size, mask=mask,
     )
@@ -33,7 +33,7 @@ def test_mask_stays_aligned_with_image_for_all_modes_and_methods(mode, method, c
 @pytest.mark.parametrize("mode", RESIZE_MODES)
 def test_missing_mask_returns_zero_mask_at_actual_output_size(mode):
     image = torch.rand(3, 9, 13, 3)
-    result, w, h, _, mask = MAIFastGPUResize().run(
+    result, w, h, _, mask, _ = MAIFastGPUResize().run(
         image, 8, 6, resize_mode=mode, multiple_of=4,
     )
     assert mask.shape == (3, h, w)
@@ -94,7 +94,7 @@ def test_preparation_rejects_invalid_source_shape():
 def test_mask_precision_is_honored(precision, dtype):
     mask = torch.rand(2, 9, 13, dtype=torch.float64)
     image = mask.unsqueeze(-1).expand(-1, -1, -1, 3)
-    result, _, _, _, output_mask = MAIFastGPUResize().run(
+    result, _, _, _, output_mask, _ = MAIFastGPUResize().run(
         image, 8, 6, resize_mode="exact", method="nearest", precision=precision, mask=mask,
     )
     assert output_mask.dtype == dtype and result.dtype == dtype
@@ -115,7 +115,7 @@ def test_padding_and_crop_preserve_image_and_mask_despite_precision(mode, precis
                            dtype=torch.float64).reshape(3, 18, 26, 4)[:, ::2, ::2]
     mask = image[..., 0].float()
     before_image, before_mask = image.clone(), mask.clone()
-    result, w, h, used, output_mask = MAIFastGPUResize().run(
+    result, w, h, used, output_mask, _ = MAIFastGPUResize().run(
         image, 8, 6, resize_mode=mode, method="lanczos4", antialias=True,
         multiple_of=8, precision=precision, chunk_size=chunk_size, mask=mask,
     )
@@ -140,7 +140,7 @@ def test_padding_and_crop_preserve_image_and_mask_despite_precision(mode, precis
 def test_mask_follows_image_processing_device(image_device, mask_device, device):
     source = torch.rand(2, 9, 13)
     image = source.unsqueeze(-1).expand(-1, -1, -1, 3).to(image_device)
-    result, _, _, _, mask = MAIFastGPUResize().run(
+    result, _, _, _, mask, _ = MAIFastGPUResize().run(
         image, 8, 6, method="nearest", device=device, mask=source.to(mask_device),
     )
     assert mask.device == result.device

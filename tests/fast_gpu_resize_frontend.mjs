@@ -14,7 +14,7 @@ class Node {
     constructor() {
         this.size = [420, 1000];
         this.inputs = [{ name: "image", link: 1 }, { name: "mask", link: 2 }];
-        this.outputs = ["image", "width", "height", "method_used", "mask"];
+        this.outputs = ["image", "width", "height", "method_used", "mask", "stitcher"];
         this.widgets = Object.entries({
             width: 1280, height: 720, resize_mode: "exact", method: "lanczos4",
             antialias: true, multiple_of: 8, device: "auto", precision: "fp16", chunk_size: 0,

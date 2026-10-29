@@ -5,9 +5,11 @@ import torch
 try:
     from ..utils.resize_kernels import RESIZE_METHODS, RESIZE_MODES, resize_image_batch
     from ..utils.resize_masks import prepare_resize_mask, resize_mask_batch
+    from ..utils.resize_stitch import create_resize_stitcher
 except ImportError:
     from utils.resize_kernels import RESIZE_METHODS, RESIZE_MODES, resize_image_batch
     from utils.resize_masks import prepare_resize_mask, resize_mask_batch
+    from utils.resize_stitch import create_resize_stitcher
 
 
 def resolve_compute_device(image_device, device):
@@ -36,8 +38,8 @@ def resolve_compute_device(image_device, device):
 class MAIFastGPUResize:
     CATEGORY = "mAI / Image"
     FUNCTION = "run"
-    RETURN_TYPES = ("IMAGE", "INT", "INT", "STRING", "MASK")
-    RETURN_NAMES = ("image", "width", "height", "method_used", "mask")
+    RETURN_TYPES = ("IMAGE", "INT", "INT", "STRING", "MASK", "MAI_RESIZE_STITCHER")
+    RETURN_NAMES = ("image", "width", "height", "method_used", "mask", "stitcher")
     DESCRIPTION = (
         "Batched torch resize with native, Lanczos and BC cubic kernels. "
         "Auto device keeps the input device; select gpu to move CPU images to CUDA. "
@@ -48,7 +50,8 @@ class MAIFastGPUResize:
         "Pad to multiple edge extends the border pixels instead of padding black. "
         "These padding/crop modes preserve source pixels and dtype exactly; "
         "method, antialias and precision are ignored. "
-        "An optional source-size mask follows the same transform; absent masks output zeros."
+        "An optional source-size mask follows the same transform; absent masks output zeros. "
+        "Connect stitcher to mAI stitch to remove padding later at the exact saved position."
     )
 
     @classmethod
@@ -86,4 +89,7 @@ class MAIFastGPUResize:
             mask, result[0], width, height, resize_mode, method, antialias,
             multiple_of, precision, chunk_size,
         )
-        return (*result, output_mask)
+        stitcher = create_resize_stitcher(
+            image.shape[2], image.shape[1], width, height, resize_mode, multiple_of,
+        )
+        return (*result, output_mask, stitcher)

@@ -26,6 +26,7 @@ from .nodes.prepare_image_for_minimax_h3 import MAIPrepareImageForMinimaxH3
 from .nodes.random_line_node import MAIRandomLine
 from .nodes.save_text_file_node import MAISaveTextFile
 from .nodes.scheduled_lora import MAIScheduledLora
+from .nodes.stitch import MAIStitch
 from .nodes.text_sequence_randomizer import MAITextSequenceRandomizer
 from .nodes.trim_frame_sequence import MAITrimFrameSequence
 from .nodes.type_converter_node import MAITypeConverterNode
@@ -78,6 +79,7 @@ NODE_CLASS_MAPPINGS = {
     "MAIRandomLine": MAIRandomLine,
     "MAISaveTextFile": MAISaveTextFile,
     "MAIScheduledLora": MAIScheduledLora,
+    "MAIStitch": MAIStitch,
     "MAITextSequenceRandomizer": MAITextSequenceRandomizer,
     "MAITrimFrameSequence": MAITrimFrameSequence,
     "MAITypeConverterNode": MAITypeConverterNode,
@@ -113,6 +115,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MAIRandomLine": "mAI Random Line",
     "MAISaveTextFile": "mAI Save Text File",
     "MAIScheduledLora": "mAI scheduled LoRA",
+    "MAIStitch": "mAI stitch",
     "MAITextSequenceRandomizer": "mAI text sequence randomizer",
     "MAITrimFrameSequence": "mAI trim frame sequence",
     "MAITypeConverterNode": "mAI Type Converter",

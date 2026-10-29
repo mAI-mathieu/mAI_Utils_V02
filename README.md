@@ -458,8 +458,9 @@ RGBA and other channel counts. Inputs: `image`, `width`, `height`, `resize_mode`
 `method`, `antialias`, `multiple_of`, `device`, `precision`, `chunk_size`, and
 optional `mask` (MASK).
 Outputs in order: `image` (IMAGE), `width` (INT), `height` (INT),
-`method_used` (STRING, including `identity` for a resize bypass), `mask` (MASK).
-The mask output is appended; the original four outputs keep their positions.
+`method_used` (STRING, including `identity` for a resize bypass), `mask` (MASK),
+`stitcher` (MAI_RESIZE_STITCHER). The stitcher output is appended; all existing
+outputs keep their names, types and positions.
 
 An optional mask follows the image's exact resize/crop/padding geometry, method,
 antialias setting, multiple rounding and precision (except the pixel-preserving
@@ -507,6 +508,13 @@ including alpha, are extended. Width/height are ignored; `multiple_of` controls
 the canvas. Aligned dimensions stay unchanged. No filtering or clamping occurs,
 and `method_used` reports `identity`. Original pixel values and dtype are always
 preserved. This repeats the outermost pixels; it does not generate new detail.
+
+The `stitcher` saves the exact content rectangle in `pad_to_multiple`,
+`pad_to_multiple_edge` and `keep_aspect_fit`, including odd padding offsets.
+Connect it to **mAI stitch** to remove padding later after image processing.
+For other modes it records the full output rectangle, so stitching passes
+through the image. The socket remains available in every mode. Metadata stores
+only geometry and does not retain source images or GPU tensors.
 
 Use `resize_mode=center_crop` to take a centered crop at exactly the requested
 `width` and `height`, preserving the original pixel scale. It ignores
@@ -582,11 +590,50 @@ Connect a source-size mask to `mask`, then view the final mask output with
 Mask to Image and Preview Image. Verify its alignment with the image in resize,
 crop and both padding modes. Disconnect the input to verify an all-zero output.
 Automated tests:
-`python -m pytest tests/test_resize_kernels.py tests/test_resize_masks.py tests/test_fast_gpu_resize.py tests/test_gpu_memory.py`.
+`python -m pytest tests/test_resize_kernels.py tests/test_resize_masks.py tests/test_fast_gpu_resize.py tests/test_resize_stitch.py tests/test_gpu_memory.py`.
 Frontend visibility checks: `node tests/fast_gpu_resize_frontend.mjs`.
 Benchmark: `python scripts/benchmark_fast_gpu_resize.py --direct` (CUDA), or
 `--device cpu --smoke`. Measurements and architecture details:
 [Fast GPU Resize notes](docs/fast_gpu_resize.md).
+
+## mAI stitch
+
+Location: `mAI / Image`. Registered as `MAIStitch`.
+
+Recuts a processed padded image at the exact position saved by **mAI Fast GPU
+Resize**. Required inputs: `image` (the processed padded IMAGE batch) and
+`stitcher` (MAI_RESIZE_STITCHER from the resize node). Optional input: `mask`
+(MASK at the padded canvas dimensions; one mask broadcasts across all frames).
+Outputs in order: `image` (IMAGE), `width` (INT), `height` (INT), `mask` (MASK).
+No widgets need configuring: the saved geometry determines the crop.
+
+The node removes padding without interpolation, clamping or dtype conversion.
+It preserves processed pixels, frame order and the image device; an optional
+mask is cropped identically and moved to that device while retaining its dtype.
+Without a mask, it outputs a zero mask matching the cropped image batch.
+For `pad_to_multiple` and `pad_to_multiple_edge`, output dimensions match the
+original source. For `keep_aspect_fit`, output stays at the fitted image scale;
+it does not resize back to the original resolution.
+
+Example: a 19×9 image padded to a multiple of 8 becomes 24×16. Its stitcher
+records left=2, top=3, width=19, height=9; **mAI stitch** removes exactly those
+borders, even after the padded image's content has changed. Connect the resize
+node's `image` through your processing nodes into stitch's `image`, and connect
+`stitcher` directly between the two nodes. Connect the resized/processed mask
+to stitch's optional `mask` if needed.
+
+Limitations: processing must preserve the padded canvas width and height and
+the content's position. A changed canvas or invalid stitcher raises a clear
+error. This geometry is specific to this pair of nodes; it is not compatible
+with Inpaint Stitch or Mask Smart Stitch. It removes padding and cannot restore
+pixels removed by crop/fill modes. Non-padding modes pass through the full image.
+
+Test in ComfyUI: restart and refresh the frontend, add **mAI Fast GPU Resize**
+and **mAI stitch**, then wire both `image` and `stitcher`. Choose
+`pad_to_multiple`, multiple 8, on a 19×9 image. Preview the 24×16 padded output
+and the 19×9 stitch output; the latter should match the source pixel for pixel.
+Repeat with edge padding and an optional mask, then save/reload the workflow.
+Automated checks: `python -m pytest tests/test_resize_stitch.py`.
 
 ## mAI JSON parser
 

@@ -4,7 +4,20 @@
 `nodes/fast_gpu_resize.py`. It resolves explicit CUDA selection using ComfyUI's
 device helper at execution time. `utils/resize_kernels.py` contains geometry,
 method selection, dtype handling, sampling and batching with no ComfyUI dependency.
-Registration adds only `MAIFastGPUResize` to the existing root mappings.
+The root mappings register `MAIFastGPUResize` and the companion `MAIStitch`.
+
+`utils/resize_stitch.py` builds versioned, tensor-free padding metadata using
+the same `calculate_target_size` geometry as the resize kernels. The appended
+`stitcher` output (MAI_RESIZE_STITCHER) records the canvas size and exact content
+rectangle for black/edge multiple padding and fit padding. Other modes record
+the full output rectangle. All earlier output positions remain unchanged.
+`nodes/stitch.py` exposes **mAI stitch**, which validates the saved canvas size
+and slices processed images and optional masks at those offsets without
+resampling. Batches may change frame count, but canvas size and content position
+must remain unchanged. Fit crops retain fitted resolution; multiple padding
+crops restore source dimensions. Missing masks produce cropped-size zeros.
+Metadata is separate from the Inpaint CropAndStitch/Mask Smart Stitch formats.
+Tests: `python -m pytest tests/test_resize_stitch.py`.
 
 `utils/resize_masks.py` validates optional source-size floating-point masks and
 broadcasts single masks to the image batch using a view. Prepared masks pass
