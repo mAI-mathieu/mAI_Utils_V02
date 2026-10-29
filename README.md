@@ -13,11 +13,33 @@ change is small. Connect the image sent to your edit model to `original_image`
 and its decoded result to `edited_image`. Outputs, in order: `image` (IMAGE)
 and `change_mask` (MASK: black keeps original, white takes edited).
 
-Detection compares mean absolute RGB differences at two scales: raw pixels and
+Select optional `mode` = **auto** to estimate the settings for each image pair.
+Auto analyzes blurred RGB and normalized local structure at multiple scales,
+estimates background drift from robust whole-image and local tile statistics,
+joins weak changes to strong edit regions, fills enclosed gaps, and rejects tiny
+isolated detections. Region size, image resolution and boundary disagreement
+determine feather width and pyramid depth. It uses content-aware seam + multiband
+blending; all eight manual tuning controls are ignored and hidden in Auto.
+An optional `edit_mask` still limits the allowed area in both modes.
+
+Auto uses CPU analysis at up to 768 pixels on the long side, then lifts its mask
+to native resolution and applies the original protection mask exactly. Each
+batch pair gets its own analysis. Stable areas use source pixels directly;
+inside fully selected regions the edited image supplies all detail. Auto does
+not transfer old texture across moved features or load an extra neural model.
+It needs SciPy, already used by the content-aware compositor.
+
+`mode` defaults to **manual** to preserve existing saved workflows and API calls.
+The new selector is appended after the existing widgets so their serialized
+order stays stable. Switching modes preserves manual settings. Converted or
+connected controls remain available; when mode is connected, all controls stay
+visible. Execution works even if the frontend extension fails to load.
+
+Manual detection compares mean absolute RGB differences at two scales: raw pixels and
 Gaussian-blurred images. This helps reject small texture/decoder drift while
 retaining larger changes. It does not use another model or understand the prompt.
 
-Settings and defaults:
+Manual settings and defaults:
 
 * `difference_threshold`: 0.08 on normalized 0–1 RGB. Raise to preserve more
   original content; lower if intended edits disappear.
@@ -50,7 +72,12 @@ within it, so gray does not describe their final per-pixel opacity. No mode
 changes the original outside this mask or restores source detail inside a fully
 selected edit. Input images and masks are never modified.
 
-Limitations: images must already be aligned with matching resolution and RGB/
+Limitations: Auto assumes much of the allowed area is unchanged. It cannot infer
+editing intent: subtle edits may disappear, and coherent artifacts may remain.
+Widespread strong differences lack a reliable background baseline, so Auto
+conservatively keeps the edit. Very small edits can disappear at the bounded
+analysis resolution. For ambiguous cases use an allowed edit mask or Manual.
+Images must already be aligned with matching resolution and RGB/
 RGBA channels. Resizing, cropping, camera shifts and large global color changes
 can trigger false detections. Subtle intended changes may be rejected, and
 large artifacts may be retained: inspect `change_mask` and tune the settings.
@@ -62,10 +89,12 @@ ComfyUI's SciPy and inherit the compositor's bounded CPU seam search.
 
 Test in ComfyUI: restart and refresh, add **mAI image preserve source**, connect
 an aligned source and edit, and preview `image`. Connect `change_mask` through
-**Convert Mask to Image** to another preview. Start with defaults, tune the
-threshold, then compare `multiband` with `content_aware_seam_multiband`. Try an
-optional edit mask and verify black areas stay exactly original. Automated tests:
-`python -m pytest --confcutdir=tests tests/test_image_preserve_source.py`.
+**Convert Mask to Image** to another preview. Select `mode=auto`, queue, and check
+that meaningful edit regions survive while stable areas retain source detail.
+Try a different pair without adjusting any settings. Test an optional edit mask
+and verify black areas stay exactly original. Switch to Manual and back, then
+save/reload to verify the mode and tuning values persist. Automated tests:
+`python -m pytest --confcutdir=tests tests/test_image_preserve_source.py tests/test_image_edit_detection.py`.
 
 ## mAI image composite masked
 

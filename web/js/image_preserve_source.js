@@ -1,0 +1,63 @@
+import { app } from "../../../scripts/app.js";
+
+const manualControls = new Set([
+    "difference_threshold", "transition_width", "comparison_blur", "detail_sensitivity",
+    "mask_expand", "mask_blur", "blend_mode", "multiband_levels",
+]);
+const hiddenStates = new WeakMap();
+const boundModes = new WeakSet();
+
+function isConnected(node, name) {
+    return node.inputs?.some((input) =>
+        (input.name === name || input.widget?.name === name) && input.link != null,
+    );
+}
+
+function updateVisibility(node) {
+    const mode = node.widgets?.find((widget) => widget.name === "mode")?.value ?? "manual";
+    const automatic = mode === "auto" && !isConnected(node, "mode");
+    for (const widget of node.widgets ?? []) {
+        if (!manualControls.has(widget.name)) continue;
+        const converted = widget.type?.startsWith("converted-widget");
+        const hide = automatic && !converted && !isConnected(node, widget.name);
+        if (hide && !hiddenStates.has(widget)) {
+            hiddenStates.set(widget, widget.hidden);
+            widget.hidden = true;
+        } else if (!hide && hiddenStates.has(widget)) {
+            widget.hidden = hiddenStates.get(widget);
+            hiddenStates.delete(widget);
+        }
+    }
+    const size = node.computeSize();
+    node.setSize([Math.max(node.size[0], size[0]), size[1]]);
+    node.setDirtyCanvas(true, true);
+}
+
+function bindVisibility(node) {
+    const mode = node.widgets?.find((widget) => widget.name === "mode");
+    if (mode && !boundModes.has(mode)) {
+        boundModes.add(mode);
+        const callback = mode.callback;
+        mode.callback = function (...args) {
+            const result = callback?.apply(this, args);
+            updateVisibility(node);
+            return result;
+        };
+    }
+    updateVisibility(node);
+}
+
+app.registerExtension({
+    name: "mAI.ImagePreserveSource.Visibility",
+    beforeRegisterNodeDef(nodeType, nodeData) {
+        if (nodeData.name !== "MAIImagePreserveSource") return;
+        for (const hook of ["onNodeCreated", "onConfigure", "onConnectionsChange"]) {
+            const original = nodeType.prototype[hook];
+            nodeType.prototype[hook] = function (...args) {
+                const result = original?.apply(this, args);
+                queueMicrotask(() => bindVisibility(this));
+                return result;
+            };
+        }
+    },
+});

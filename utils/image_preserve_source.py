@@ -6,6 +6,7 @@ import torch
 import torch.nn.functional as F
 
 from .image_blur import blur_image
+from .image_edit_detection import detect_image_edits
 from .masked_image_composite import BLEND_MODES, composite_with_source_mask
 
 
@@ -52,7 +53,7 @@ def _prepare_images(original_image, edited_image, edit_mask):
 def preserve_source_image(
     original_image, edited_image, difference_threshold=0.08, transition_width=0.04,
     comparison_blur=2.0, detail_sensitivity=0.25, mask_expand=2, mask_blur=2.0,
-    blend_mode="multiband", multiband_levels=5, edit_mask=None,
+    blend_mode="multiband", multiband_levels=5, edit_mask=None, mode="manual",
 ):
     """Return image and final selection mask (white selects the edit).
 
@@ -61,7 +62,26 @@ def preserve_source_image(
     Threshold with a smooth transition, expand, feather, then restrict by the
     optional edit_mask. The shared compositor protects exact black/white mask
     endpoints and applies seam/pyramid work only inside the gray band.
+    Auto instead derives coherent regions and blending scales per image pair;
+    manual tuning parameters are ignored in that mode.
     """
+    if mode not in ("manual", "auto"):
+        raise ValueError(f"Unknown mode: {mode}")
+    if mode == "auto":
+        original, edited, allowed, dtype = _prepare_images(original_image, edited_image, edit_mask)
+        result = torch.empty_like(original)
+        masks = torch.empty(allowed.shape, device=original.device, dtype=dtype)
+        for index in range(original.shape[0]):
+            mask, settings = detect_image_edits(
+                original[index:index + 1, ..., :3], edited[index:index + 1, ..., :3],
+                allowed[index:index + 1],
+            )
+            masks[index] = mask[0]
+            result[index:index + 1] = composite_with_source_mask(
+                original[index:index + 1], edited[index:index + 1], mask,
+                "content_aware_seam_multiband", settings.multiband_levels,
+            )
+        return result, masks
     for name, value, maximum in (
         ("difference_threshold", difference_threshold, 1),
         ("transition_width", transition_width, 1),

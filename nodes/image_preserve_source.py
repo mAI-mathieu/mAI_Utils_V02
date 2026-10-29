@@ -16,7 +16,8 @@ class MAIImagePreserveSource:
     DESCRIPTION = (
         "Keep the original image except where a substantial edit is detected. "
         "Compare aligned images at pixel and blurred scales, then blend their "
-        "join with feather, multiband, or content-aware seams."
+        "join with feather, multiband, or content-aware seams. Select auto to "
+        "estimate drift, group edits and choose blending scales automatically."
     )
 
     @classmethod
@@ -56,6 +57,9 @@ class MAIImagePreserveSource:
                 "edit_mask": ("MASK", {
                     "tooltip": "Optional allowed edit area. Black always protects the original; white allows detection.",
                 }),
+                "mode": (["manual", "auto"], {"default": "manual",
+                    "tooltip": "Auto estimates edit regions and blending settings per image; manual uses the tuning controls.",
+                }),
             },
         }
 
@@ -63,10 +67,10 @@ class MAIImagePreserveSource:
         self, original_image, edited_image, difference_threshold=0.08,
         transition_width=0.04, comparison_blur=2.0, detail_sensitivity=0.25,
         mask_expand=2, mask_blur=2.0, blend_mode="multiband", multiband_levels=5,
-        edit_mask=None,
+        edit_mask=None, mode="manual",
     ):
         return preserve_source_image(
             original_image, edited_image, difference_threshold, transition_width,
             comparison_blur, detail_sensitivity, mask_expand, mask_blur,
-            blend_mode, multiband_levels, edit_mask,
+            blend_mode, multiband_levels, edit_mask, mode,
         )
