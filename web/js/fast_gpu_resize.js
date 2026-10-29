@@ -11,10 +11,12 @@ function updateVisibility(node) {
     const mode = node.widgets?.find((widget) => widget.name === "resize_mode");
     if (!mode) return;
     for (const widget of node.widgets) {
-        if (!samplingControls.has(widget.name)) continue;
+        if (!samplingControls.has(widget.name) && widget.name !== "fill_color") continue;
         // Converted widgets belong to the frontend; leave their sockets intact.
         const converted = widget.type?.startsWith("converted-widget");
-        const hide = pixelPreservingModes.has(mode.value) && !converted;
+        const hide = !converted && (widget.name === "fill_color"
+            ? mode.value !== "pad_to_multiple"
+            : pixelPreservingModes.has(mode.value));
         if (hide && !hiddenStates.has(widget)) {
             hiddenStates.set(widget, widget.hidden);
             widget.hidden = true;

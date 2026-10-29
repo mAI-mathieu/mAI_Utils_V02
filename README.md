@@ -456,7 +456,7 @@ Location: `mAI / Image`. Registered as `MAIFastGPUResize`.
 Resizes a complete ComfyUI `IMAGE` batch using PyTorch tensors. Supports RGB,
 RGBA and other channel counts. Inputs: `image`, `width`, `height`, `resize_mode`,
 `method`, `antialias`, `multiple_of`, `device`, `precision`, `chunk_size`, and
-optional `mask` (MASK).
+optional `mask` (MASK) and `fill_color` (hex STRING, default `#000000`).
 Outputs in order: `image` (IMAGE), `width` (INT), `height` (INT),
 `method_used` (STRING, including `identity` for a resize bypass), `mask` (MASK),
 `stitcher` (MAI_RESIZE_STITCHER). The stitcher output is appended; all existing
@@ -464,7 +464,7 @@ outputs keep their names, types and positions.
 
 An optional mask follows the image's exact resize/crop/padding geometry, method,
 antialias setting, multiple rounding and precision (except the pixel-preserving
-padding/crop modes described below). Fit/black padding
+padding/crop modes described below). Fit/constant-color padding
 uses zero mask values; edge padding repeats mask border values. Masks must have
 the source image's width/height and shape `[B,H,W]` or `[H,W]`. A single mask
 broadcasts over all image frames; otherwise batch sizes must match. Mismatched
@@ -498,7 +498,13 @@ Extra pixels go on the bottom/right when padding is odd. No resampling or
 clamping occurs, regardless of `method` or `antialias`; `method_used` reports
 `identity` because filtering is bypassed. Original pixel values and dtype are
 always preserved, even if a saved workflow specifies an explicit precision.
-Padding fills all channels with zero (transparent black for RGBA).
+`fill_color` sets the padding RGB color in `#RRGGBB` format (for example,
+`#FF8000` for orange). This control is visible only in `pad_to_multiple` mode
+and retains its value when switching modes or saving/reloading. Omitted values
+default to black, preserving existing workflows. Other modes ignore this input.
+Only padding is colored; original pixels remain unchanged. Alpha and channels
+after RGB stay zero in padding (transparent for RGBA); images with fewer than
+three channels use the corresponding leading RGB values. Mask padding stays zero.
 
 Use `resize_mode=pad_to_multiple_edge` for the same canvas dimensions and
 unchanged original image, filling padding by stretching the nearest border
@@ -578,7 +584,9 @@ method diagnostics. Try 1024×1024 with fit/fill and chunk size 32; save and
 reload the workflow. Try `keep_aspect` on a 16:9 image with width/height 1024,
 `multiple_of=1`: verify a 1024×576 output with no borders or cropping.
 Try `pad_to_multiple` with `multiple_of=64` on a 1019×769 image: verify a
-1024×832 canvas with the original image unchanged at the center.
+1024×832 canvas with the original image unchanged at the center. Set
+`fill_color=#FF8000` and verify orange borders; save/reload to check the color
+persists. Switch modes and verify `fill_color` is hidden outside `pad_to_multiple`.
 Switch to `pad_to_multiple_edge`: verify the same canvas dimensions with the
 border colors stretched through the padding and the original image unchanged.
 Try `center_crop` on a 1920×1080 image with width 1280 and height 720: verify

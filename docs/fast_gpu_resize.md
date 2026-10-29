@@ -31,16 +31,22 @@ names, types and positions; the optional input adds no serialized widget.
 `pad_to_multiple` derives the canvas from the source dimensions, rounding each
 up to the smallest multiple at least as large as the source. Requested width
 and height are ignored. Resize dimensions stay equal to the source, so the
-existing identity filtering bypass and centered zero padding preserve original
+existing identity filtering bypass and centered constant-color padding preserve original
 pixels and source dtype regardless of the requested precision. Already aligned
 dimensions are unchanged. Existing modes retain nearest-multiple rounding.
 The mode is appended to the existing dropdown; defaults and sockets are unchanged.
+The optional appended `fill_color` widget defaults to `#000000` for saved workflow
+compatibility and is shown only for this mode. Nonblack RGB padding is allocated
+on the processing device with the source dtype, then source pixels are copied
+into the saved content rectangle. Extra channels, including alpha, stay zero.
+Masks use the default zero fill independently of the image color. Other modes
+ignore the color, including its validation.
 
 `pad_to_multiple_edge` shares the same source-based geometry and bypasses
 filtering, but uses torch replicate padding to extend the outermost rows,
 columns and corner pixels. This preserves all original values and channels,
 including alpha, regardless of the requested precision. It also supports one-pixel source axes
-and padding larger than the source. Existing black padding modes are unchanged.
+and padding larger than the source. The fill color does not affect edge padding.
 
 `center_crop` keeps the resize dimensions equal to the source and uses the
 existing centered slicing path to produce the exact requested width and height.

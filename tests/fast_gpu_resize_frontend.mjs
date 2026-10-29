@@ -18,6 +18,7 @@ class Node {
         this.widgets = Object.entries({
             width: 1280, height: 720, resize_mode: "exact", method: "lanczos4",
             antialias: true, multiple_of: 8, device: "auto", precision: "fp16", chunk_size: 0,
+            fill_color: "#12ABEF",
         }).map(([name, value]) => ({
             name, value, type: "combo", callback() { return "callback"; },
             serializeValue() { return this.value; },
@@ -45,6 +46,7 @@ const mode = widget("resize_mode");
 assert.equal(node.onNodeCreated(), "created");
 await Promise.resolve();
 const expandedHeight = node.size[1];
+assert.equal(widget("fill_color").hidden, true);
 
 for (const value of ["pad_to_multiple", "pad_to_multiple_edge", "center_crop"]) {
     mode.value = value;
@@ -52,6 +54,7 @@ for (const value of ["pad_to_multiple", "pad_to_multiple_edge", "center_crop"]) 
     for (const name of ["method", "antialias", "precision"]) {
         assert.equal(widget(name).hidden, true);
     }
+    assert.equal(widget("fill_color").hidden, value === "pad_to_multiple" ? undefined : true);
     assert.ok(node.size[1] < expandedHeight);
     assert.equal(node.size[0], 420);
     const saved = node.widgets.map((w) => w.serializeValue());
@@ -59,6 +62,7 @@ for (const value of ["pad_to_multiple", "pad_to_multiple_edge", "center_crop"]) 
     await Promise.resolve();
     assert.deepEqual(node.widgets.map((w) => w.serializeValue()), saved);
     assert.equal(widget("method").hidden, true);
+    assert.equal(widget("fill_color").hidden, value === "pad_to_multiple" ? undefined : true);
 }
 
 for (const value of ["exact", "keep_aspect_fit", "keep_aspect_fill", "keep_aspect"]) {
@@ -68,7 +72,9 @@ for (const value of ["exact", "keep_aspect_fit", "keep_aspect_fill", "keep_aspec
         assert.equal(widget(name).hidden, undefined);
     }
     assert.equal(node.size[1], expandedHeight);
+    assert.equal(widget("fill_color").hidden, true);
 }
+assert.equal(widget("fill_color").value, "#12ABEF");
 assert.equal(widget("method").value, "lanczos4");
 assert.equal(widget("antialias").value, true);
 assert.equal(widget("precision").value, "fp16");
@@ -88,4 +94,15 @@ mode.callback(mode.value);
 assert.equal(widget("method").hidden, true);
 assert.equal(widget("method").type, "converted-widget");
 assert.equal(node.inputs.at(-1).link, 42);
+
+// A converted fill color keeps its socket in every mode as well.
+widget("fill_color").type = "converted-widget";
+widget("fill_color").hidden = true;
+node.inputs.push({ name: "fill_color", widget: { name: "fill_color" }, link: 43 });
+for (const value of ["pad_to_multiple", "exact"]) {
+    mode.value = value;
+    mode.callback(value);
+    assert.equal(widget("fill_color").type, "converted-widget");
+    assert.equal(node.inputs.at(-1).link, 43);
+}
 console.log("Resize mode visibility, saved values, lifecycle and socket preservation passed.");

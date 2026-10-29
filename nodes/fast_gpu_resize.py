@@ -45,7 +45,7 @@ class MAIFastGPUResize:
         "Auto device keeps the input device; select gpu to move CPU images to CUDA. "
         "Keep aspect fits within width/height without padding or cropping. "
         "Fit pads black; fill crops from the center. "
-        "Pad to multiple keeps the original image size and only adds black padding. "
+        "Pad to multiple keeps the original image size and adds padding in fill_color (default black). "
         "Center crop takes the exact width/height from the original without resizing. "
         "Pad to multiple edge extends the border pixels instead of padding black. "
         "These padding/crop modes preserve source pixels and dtype exactly; "
@@ -61,7 +61,7 @@ class MAIFastGPUResize:
             "width": ("INT", {"default": 1280, "min": 1, "max": 16384}),
             "height": ("INT", {"default": 720, "min": 1, "max": 16384}),
             "resize_mode": (list(RESIZE_MODES), {"default": "exact",
-                                               "tooltip": "keep_aspect fits within width/height without padding or cropping. pad_to_multiple and pad_to_multiple_edge ignore width/height and preserve original image size, padding to the next multiple_of with black or stretched edge pixels. center_crop crops the original to exact width/height without resizing; dimensions must not exceed the source."}),
+                                               "tooltip": "keep_aspect fits within width/height without padding or cropping. pad_to_multiple and pad_to_multiple_edge ignore width/height and preserve original image size, padding to the next multiple_of with fill_color or stretched edge pixels. center_crop crops the original to exact width/height without resizing; dimensions must not exceed the source."}),
             "method": (list(RESIZE_METHODS), {"default": "auto",
                                              "tooltip": "Interpolation method. Ignored in pad_to_multiple, pad_to_multiple_edge and center_crop; original pixels are copied exactly."}),
             "antialias": ("BOOLEAN", {"default": True}),
@@ -74,16 +74,20 @@ class MAIFastGPUResize:
                                    "tooltip": "0: whole batch for native modes, automatic memory-bounded chunks for custom kernels. Positive: frames per chunk."}),
         }, "optional": {
             "mask": ("MASK", {"tooltip": "Source-size mask transformed with the image. One mask broadcasts across an image batch. If omitted, outputs a zero mask at the output size."}),
+            "fill_color": ("STRING", {"default": "#000000",
+                                      "tooltip": "Padding color in #RRGGBB format. Only used in pad_to_multiple mode. Alpha and channels after RGB stay zero in padding; mask padding stays zero."}),
         }}
 
     def run(self, image, width=1280, height=720, resize_mode="exact", method="auto",
-            antialias=True, multiple_of=1, device="auto", precision="auto", chunk_size=0, mask=None):
+            antialias=True, multiple_of=1, device="auto", precision="auto", chunk_size=0, mask=None,
+            fill_color="#000000"):
         if not isinstance(image, torch.Tensor):
             raise ValueError("image must be a ComfyUI IMAGE tensor.")
         mask = prepare_resize_mask(mask, image.shape)
         result = resize_image_batch(
             image, width, height, resize_mode, method, antialias, multiple_of,
             resolve_compute_device(image.device, device), precision, chunk_size,
+            fill_color=fill_color,
         )
         output_mask = resize_mask_batch(
             mask, result[0], width, height, resize_mode, method, antialias,

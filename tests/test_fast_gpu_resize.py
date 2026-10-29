@@ -28,6 +28,7 @@ def test_node_contract_and_defaults():
     assert node.RETURN_TYPES == ("IMAGE", "INT", "INT", "STRING", "MASK", "MAI_RESIZE_STITCHER")
     assert node.RETURN_NAMES == ("image", "width", "height", "method_used", "mask", "stitcher")
     assert node.INPUT_TYPES()["optional"]["mask"][0] == "MASK"
+    assert node.INPUT_TYPES()["optional"]["fill_color"][1]["default"] == "#000000"
     assert inputs["multiple_of"][0] == "INT"
     assert inputs["multiple_of"][1]["min"] == 1
     assert inputs["resize_mode"][0] == ["exact", "keep_aspect_fit", "keep_aspect_fill", "keep_aspect", "pad_to_multiple", "center_crop", "pad_to_multiple_edge"]
@@ -71,6 +72,25 @@ def test_node_center_crop_returns_exact_requested_dimensions():
     assert result.shape == (2, 6, 12, 3)
     assert (w, h, used) == (12, 6, "identity")
     assert torch.equal(result, image[:, 1:7, 3:15])
+
+
+def test_node_fill_color_only_affects_image_padding_and_stitch_recovers_source():
+    from utils.resize_stitch import recut_resize_padding
+
+    image = torch.randn(2, 9, 19, 3)
+    source_mask = torch.rand(1, 9, 19)
+    result, w, h, used, mask, stitcher = MAIFastGPUResize().run(
+        image, resize_mode="pad_to_multiple", multiple_of=8,
+        fill_color="#FF8000", mask=source_mask,
+    )
+    assert (w, h, used) == (24, 16, "identity")
+    torch.testing.assert_close(result[:, 0, 0], torch.tensor([1., 128 / 255, 0.]).expand(2, -1))
+    assert torch.equal(result[:, 3:12, 2:21], image)
+    assert torch.equal(mask[:, 3:12, 2:21], source_mask.expand(2, -1, -1))
+    assert not mask[:, :3].any() and not mask[:, 12:].any()
+    assert not mask[:, :, :2].any() and not mask[:, :, 21:].any()
+    restored, _, _, _ = recut_resize_padding(result, stitcher, mask)
+    assert torch.equal(restored, image)
 
 
 def test_node_edge_padding_preserves_image_and_extends_border():

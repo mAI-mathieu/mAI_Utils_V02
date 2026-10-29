@@ -5,7 +5,7 @@ import torch
 import torch.nn.functional as F
 
 from utils.resize_kernels import (
-    CUSTOM_METHODS, NATIVE_METHODS, RESIZE_METHODS, apply_multiple_of,
+    CUSTOM_METHODS, NATIVE_METHODS, RESIZE_METHODS, RESIZE_MODES, apply_multiple_of,
     bc_cubic_kernel, build_sampling_weights, calculate_target_size,
     choose_chunk_size, lanczos_kernel, resize_image_batch, round_up_to_multiple,
     select_auto_resize_method,
@@ -355,6 +355,41 @@ def test_kernel_definitions_and_support():
 
 
 DEVICES = ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])
+
+
+@pytest.mark.parametrize("device", DEVICES)
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16, torch.float64])
+@pytest.mark.parametrize("channels", [1, 3, 4, 5])
+def test_colored_padding_preserves_source_and_matches_chunking(device, dtype, channels):
+    image = torch.randn(3, 3, 7, channels, device=device, dtype=dtype)
+    before = image.clone()
+    settings = dict(resize_mode="pad_to_multiple", multiple_of=8,
+                    precision="fp16", fill_color="#12aBeF")
+    result = resize_image_batch(image, 1, 1, **settings)[0]
+    chunked = resize_image_batch(image, 1, 1, chunk_size=1, **settings)[0]
+    assert result.dtype == dtype and result.device == image.device
+    assert torch.equal(result, chunked)
+    assert torch.equal(image, before)
+    assert torch.equal(result[:, 2:5, :7], image)
+    rgb = (18 / 255, 171 / 255, 239 / 255)
+    color = image.new_tensor(rgb[:channels] + (0.,) * max(0, channels - 3))
+    for border in (result[:, :2], result[:, 5:], result[:, :, 7:]):
+        assert torch.equal(border, color.expand_as(border))
+
+
+@pytest.mark.parametrize("color", ["red", "#FFF", "#GG0000", "", None])
+def test_invalid_fill_color_is_rejected_even_without_padding(color):
+    with pytest.raises((TypeError, ValueError), match="#RRGGBB"):
+        resize_image_batch(torch.zeros(1, 4, 4, 3), 4, 4,
+                           resize_mode="pad_to_multiple", fill_color=color)
+
+
+@pytest.mark.parametrize("mode", [mode for mode in RESIZE_MODES if mode != "pad_to_multiple"])
+def test_other_modes_ignore_fill_color(mode):
+    image = torch.rand(1, 5, 7, 3)
+    expected = resize_image_batch(image, 4, 4, resize_mode=mode, multiple_of=4)[0]
+    actual = resize_image_batch(image, 4, 4, resize_mode=mode, multiple_of=4, fill_color="ignored")[0]
+    assert torch.equal(actual, expected)
 
 
 @pytest.mark.parametrize("device", DEVICES)

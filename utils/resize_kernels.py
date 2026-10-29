@@ -7,6 +7,8 @@ from numbers import Integral
 import torch
 import torch.nn.functional as F
 
+from .mask_outline import parse_hex_color
+
 
 NATIVE_METHODS = ("nearest", "nearest-exact", "bilinear", "bicubic", "area")
 CUSTOM_METHODS = ("lanczos2", "lanczos3", "lanczos4", "mitchell", "catmull_rom")
@@ -186,7 +188,7 @@ def resize_native(x, size, method, antialias=True):
     return F.interpolate(x.float() if promote else x, **kwargs)
 
 
-def _finish_geometry(x, geometry, resize_mode):
+def _finish_geometry(x, geometry, resize_mode, padding_rgb=None):
     if resize_mode in ("keep_aspect_fit", "pad_to_multiple", "pad_to_multiple_edge"):
         dw = geometry.width - x.shape[3]
         dh = geometry.height - x.shape[2]
@@ -194,6 +196,16 @@ def _finish_geometry(x, geometry, resize_mode):
             padding = (dw//2, dw - dw//2, dh//2, dh - dh//2)
             if resize_mode == "pad_to_multiple_edge":
                 return F.pad(x, padding, mode="replicate")
+            if resize_mode == "pad_to_multiple" and padding_rgb is not None and any(padding_rgb):
+                # Broadcast RGB on-device; additional channels retain zero padding.
+                channels = x.shape[1]
+                color = padding_rgb[:channels] + (0.0,) * max(0, channels - 3)
+                result = x.new_tensor(color).view(1, channels, 1, 1).expand(
+                    x.shape[0], channels, geometry.height, geometry.width,
+                ).clone()
+                left, _, top, _ = padding
+                result[:, :, top:top + x.shape[2], left:left + x.shape[3]] = x
+                return result
             return F.pad(x, padding, value=0.0)
     elif resize_mode in ("keep_aspect_fill", "center_crop"):
         left = (x.shape[3] - geometry.width) // 2
@@ -232,7 +244,7 @@ def choose_chunk_size(batch, channels, source_size, resize_size, output_size,
 @torch.inference_mode()
 def resize_image_batch(image, width, height, resize_mode="exact", method="auto",
                        antialias=True, multiple_of=1, compute_device=None,
-                       precision="auto", chunk_size=0):
+                       precision="auto", chunk_size=0, fill_color="#000000"):
     """Return BHWC IMAGE, width, height, actual method; preserve frame ordering."""
     if not isinstance(image, torch.Tensor) or image.ndim != 4 or any(d < 1 for d in image.shape):
         raise ValueError("image must be a non-empty torch tensor [batch, height, width, channels].")
@@ -243,6 +255,7 @@ def resize_image_batch(image, width, height, resize_mode="exact", method="auto",
     if not isinstance(antialias, bool):
         raise ValueError("antialias must be a boolean.")
     geometry = calculate_target_size(image.shape[2], image.shape[1], width, height, resize_mode, multiple_of)
+    padding_rgb = parse_hex_color(fill_color) if resize_mode == "pad_to_multiple" else None
     device = image.device if compute_device is None else torch.device(compute_device)
     # Padding and cropping must copy source values exactly, even when a saved
     # workflow requests reduced precision. Device transfers remain lossless.
@@ -275,11 +288,11 @@ def resize_image_batch(image, width, height, resize_mode="exact", method="auto",
     required = output_bytes + scratch_bytes if device.type == "cuda" else 0
     with gpu_memory_scope(cleanup_device, required):
         return _resize_prepared(image, device, dtype, work_dtype, geometry, resize_mode,
-                                method_used, antialias, size, custom, chunks, identity)
+                                method_used, antialias, size, custom, chunks, identity, padding_rgb)
 
 
 def _resize_prepared(image, device, dtype, work_dtype, geometry, resize_mode,
-                     method_used, antialias, size, custom, chunks, identity):
+                     method_used, antialias, size, custom, chunks, identity, padding_rgb):
     if identity:
         return image.to(device=device, dtype=dtype), geometry.width, geometry.height, "identity"
     tables = (None, None)
@@ -298,7 +311,7 @@ def _resize_prepared(image, device, dtype, work_dtype, geometry, resize_mode,
             x = resize_native(x, size, method_used, antialias)
         if custom or method_used == "bicubic":
             x.clamp_(0.0, 1.0)  # Only the final reconstruction is range limited.
-        x = _finish_geometry(x, geometry, resize_mode)
+        x = _finish_geometry(x, geometry, resize_mode, padding_rgb)
         return x.permute(0, 2, 3, 1).to(dtype=dtype)
 
     if chunks >= image.shape[0]:
