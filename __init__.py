@@ -33,6 +33,7 @@ from .nodes.stitch import MAIStitch
 from .nodes.text_sequence_randomizer import MAITextSequenceRandomizer
 from .nodes.trim_frame_sequence import MAITrimFrameSequence
 from .nodes.type_converter_node import MAITypeConverterNode
+from .nodes.video_compare import MAIVideoCompare
 from .nodes.video_loader import MAIVideoLoader
 from .utils.cropandstitch_dependency import CropAndStitchDependencyError
 
@@ -89,6 +90,7 @@ NODE_CLASS_MAPPINGS = {
     "MAITextSequenceRandomizer": MAITextSequenceRandomizer,
     "MAITrimFrameSequence": MAITrimFrameSequence,
     "MAITypeConverterNode": MAITypeConverterNode,
+    "MAIVideoCompare": MAIVideoCompare,
     "MAIVideoLoader": MAIVideoLoader,
 }
 
@@ -128,6 +130,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MAITextSequenceRandomizer": "mAI text sequence randomizer",
     "MAITrimFrameSequence": "mAI trim frame sequence",
     "MAITypeConverterNode": "mAI Type Converter",
+    "MAIVideoCompare": "mAI video compare",
     "MAIVideoLoader": "mAI video loader",
 }
 

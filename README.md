@@ -5,6 +5,43 @@ ComfyUI custom node pack for small, reusable mAI utility nodes.
 Install this folder under ComfyUI's `custom_nodes` directory, then restart ComfyUI.
 The currently registered nodes are listed below.
 
+## mAI video compare
+
+Location: `mAI / Image`. Registered as `MAIVideoCompare`.
+Connect two ordered IMAGE batches or lists of frames to `frames_a` and `frames_b`
+and queue. The node overlays both sequences in an embedded player: move the
+pointer across the picture to reveal A on the left and B on the right. The
+Reveal A/B slider also supports touch and keyboard control. Use Play/Pause,
+the frame timeline, and Loop (on by default). Space toggles playback when the
+picture has keyboard focus; scrubbing pauses playback.
+
+Inputs: `frames_a`, `frames_b`, shared `fps` (default 24), and
+`preview_max_size` (default 768 pixels on the longest side, no upscaling).
+Outputs: an interactive preview only; there are no output sockets.
+Both sides start at frame zero and use the same frame index and clock. Unequal
+lengths stop at the shorter sequence, with source counts shown in the player.
+Both frames are displayed together after loading; slow playback may skip pairs.
+Images with different dimensions are centered and fitted into A's aspect ratio,
+preserving proportions with black letterboxing. Input tensors remain unchanged.
+
+Previews use temporary 8-bit PNGs (including alpha), with a bounded browser
+frame cache. No FFmpeg, codec, GPU, audio, or new dependency is required. Long
+clips or large preview sizes take disk space and preparation time; the comparison
+is intended for visual inspection, not original floating-point pixel analysis.
+This synchronizes by frame index, without motion matching, offset correction,
+or conversion between different source frame rates. Use matching source FPS and
+trim beforehand if needed. Preview files stay in ComfyUI temp until it is cleared;
+change a preview setting and queue again if an old preview becomes unavailable.
+Playback requires the frontend
+extension; backend preview preparation still works without JavaScript.
+
+Test in ComfyUI: restart and refresh the browser, add **mAI video compare**,
+connect two video loaders' IMAGE outputs, set their shared FPS, and queue.
+Check hover reveal during playback and pause, scrubbing, Loop on/off, and clips
+of different lengths/resolutions. Automated checks:
+`python -m pytest tests/test_video_compare.py` and
+`node tests/video_compare_frontend.mjs`.
+
 ## mAI pixel drift fix
 
 Location: `mAI / Image`. Registered as `MAIPixelDriftFix`.
