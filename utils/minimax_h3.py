@@ -4,7 +4,7 @@ import operator
 
 DIMENSION_MULTIPLE = 32
 PIXELS_PER_MEGAPIXEL = 1024 * 1024
-MEGAPIXEL_OPTIONS = tuple(f"{value / 10:.1f} MP" for value in range(2, 21))
+MEGAPIXEL_OPTIONS = tuple(f"{value / 10:.1f} MP" for value in range(2, 81))
 RESIZE_MODE_MEGAPIXELS = "Target megapixels"
 RESIZE_MODE_SHORT_SIDE = "Short side"
 # Accepted by the backend for older saved/API workflows.
@@ -25,8 +25,8 @@ def parse_target_megapixels(value):
     except (TypeError, ValueError) as error:
         raise ValueError(f"Invalid target megapixel value: {value}") from error
 
-    if isinstance(value, bool) or not math.isfinite(megapixels) or not 0.2 <= megapixels <= 2.0:
-        raise ValueError("target_megapixels must be a finite number from 0.2 MP to 2.0 MP")
+    if isinstance(value, bool) or not math.isfinite(megapixels) or not 0.2 <= megapixels <= 8.0:
+        raise ValueError("target_megapixels must be a finite number from 0.2 MP to 8.0 MP")
 
     return megapixels
 

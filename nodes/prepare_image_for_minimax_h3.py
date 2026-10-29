@@ -10,6 +10,7 @@ try:
         calculate_minimax_h3_dimensions,
         calculate_short_side_dimensions,
     )
+    from ..utils.minimax_h3_resize import resize_minimax_image
 except ImportError:
     from utils.minimax_h3 import (
         DIMENSION_MULTIPLE,
@@ -22,6 +23,7 @@ except ImportError:
         calculate_minimax_h3_dimensions,
         calculate_short_side_dimensions,
     )
+    from utils.minimax_h3_resize import resize_minimax_image
 
 
 class MAIPrepareImageForMinimaxH3:
@@ -37,7 +39,7 @@ class MAIPrepareImageForMinimaxH3:
                 "image": ("IMAGE",),
                 "target_megapixels": (
                     "FLOAT",
-                    {"default": 1.0, "min": 0.2, "max": 2.0, "step": 0.01},
+                    {"default": 1.0, "min": 0.2, "max": 8.0, "step": 0.01},
                 ),
                 "resize_mode": (
                     list(RESIZE_MODE_OPTIONS),
@@ -115,14 +117,4 @@ class MAIPrepareImageForMinimaxH3:
         if width == target_width and height == target_height:
             return (image,)
 
-        import comfy.utils
-
-        channels_first = image.movedim(-1, 1)
-        resized = comfy.utils.common_upscale(
-            channels_first,
-            target_width,
-            target_height,
-            resize_algorithm,
-            "disabled",
-        )
-        return (resized.movedim(1, -1),)
+        return (resize_minimax_image(image, target_width, target_height, resize_algorithm),)

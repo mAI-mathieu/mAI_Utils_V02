@@ -20,8 +20,8 @@ from utils.minimax_h3 import (
 
 def test_megapixel_options_cover_requested_range():
     assert MEGAPIXEL_OPTIONS[0] == "0.2 MP"
-    assert MEGAPIXEL_OPTIONS[-1] == "2.0 MP"
-    assert len(MEGAPIXEL_OPTIONS) == 19
+    assert MEGAPIXEL_OPTIONS[-1] == "8.0 MP"
+    assert len(MEGAPIXEL_OPTIONS) == 79
 
 
 @pytest.mark.parametrize(
@@ -31,6 +31,8 @@ def test_megapixel_options_cover_requested_range():
         (1080, 1920, "1.0 MP", (768, 1376)),
         (1024, 1024, "0.2 MP", (448, 448)),
         (1024, 1024, "2.0 MP", (1440, 1440)),
+        (2048, 1024, "8.0 MP", (4096, 2048)),
+        (1024, 2048, "8.0 MP", (2048, 4096)),
     ],
 )
 def test_calculates_expected_grid_dimensions(width, height, megapixels, expected):
@@ -126,7 +128,7 @@ def test_parses_dropdown_label_and_numeric_value():
     assert parse_target_megapixels(0.7) == 0.7
 
 
-@pytest.mark.parametrize("value", [0.2, 0.25, 0.725, 1.25, 2.0])
+@pytest.mark.parametrize("value", [0.2, 0.25, 0.725, 1.25, 2.0, 2.001, 4.5, 7.99, 8.0])
 def test_accepts_float_targets_between_old_dropdown_steps(value):
     assert parse_target_megapixels(value) == value
     width, height = calculate_minimax_h3_dimensions(1920, 1080, value, multiple_of=1)
@@ -136,7 +138,7 @@ def test_accepts_float_targets_between_old_dropdown_steps(value):
 def test_node_exposes_float_megapixel_target():
     input_type, options = MAIPrepareImageForMinimaxH3.INPUT_TYPES()["required"]["target_megapixels"]
     assert input_type == "FLOAT"
-    assert options == {"default": 1.0, "min": 0.2, "max": 2.0, "step": 0.01}
+    assert options == {"default": 1.0, "min": 0.2, "max": 8.0, "step": 0.01}
     image = torch.zeros(1, 512, 512, 3)
     output, = MAIPrepareImageForMinimaxH3().prepare(image, 0.25)
     assert output is image
@@ -284,7 +286,7 @@ def test_node_rejects_unknown_resize_mode():
 
 @pytest.mark.parametrize(
     "value",
-    ["0.1 MP", "2.1 MP", "invalid", None, 0.199, 2.001, float("nan"), float("inf"), True, False],
+    ["0.1 MP", "8.1 MP", "invalid", None, 0.199, 8.001, float("nan"), float("inf"), True, False],
 )
 def test_rejects_invalid_megapixel_values(value):
     with pytest.raises(ValueError):

@@ -124,6 +124,16 @@ batch pair gets its own strategy and analysis. Stable areas use source pixels
 directly. No image is warped or globally sharpened, and no neural model is loaded.
 It needs SciPy, already used by the content-aware compositor.
 
+Both Auto and Manual support CPU-only execution without querying or initializing
+CUDA. Processing normally follows the original image's device. If a CUDA input
+encounters a GPU out-of-memory, driver, initialization, kernel, cuBLAS or cuDNN
+failure, the node warns once and retries the complete operation on CPU, including
+the optional mask. Fallback outputs stay on CPU to avoid another GPU allocation;
+image/mask dtypes, resolution, batch behavior and socket order are preserved.
+Validation errors, unrelated runtime errors and CPU failures remain visible.
+Recovery requires enough system RAM and readable inputs; a broken CUDA context
+can prevent copying GPU-resident inputs back to CPU.
+
 `mode` defaults to **manual** to preserve existing saved workflows and API calls.
 The new selector is appended after the existing widgets so their serialized
 order stays stable. Switching modes preserves manual settings. Converted or
@@ -180,8 +190,9 @@ or false detections. Subtle intended changes may be rejected, and
 large artifacts may be retained: inspect `change_mask` and tune the settings.
 Alpha does not drive detection; it follows the composite mask/seam. Singleton
 image/mask batches broadcast; other batch mismatches raise errors. Output keeps
-the original floating dtype and device; masks use float32 (float64 for a float64
-original). Uses existing PyTorch utilities; content-aware modes also require
+the original floating dtype and device (CPU after a GPU fallback); masks use
+float32 (float64 for a float64 original). Uses existing PyTorch utilities;
+content-aware modes also require
 ComfyUI's SciPy and inherit the compositor's bounded CPU seam search.
 
 Test in ComfyUI: restart and refresh, add **mAI image preserve source**, connect
@@ -194,7 +205,9 @@ relighting should keep the new lighting. Inspect changed features at 100% for
 sharpness. Test an optional edit mask
 and verify black areas stay exactly original. Switch to Manual and back, then
 save/reload to verify the mode and tuning values persist. Automated tests:
-`python -m pytest --confcutdir=tests tests/test_image_preserve_source.py tests/test_image_edit_detection.py tests/test_image_edit_blend.py`.
+`python -m pytest --confcutdir=tests tests/test_image_preserve_source.py tests/test_image_edit_detection.py tests/test_image_edit_blend.py tests/test_image_preserve_source_fallback.py`.
+For CPU-only verification, run ComfyUI with `--cpu` and queue an aligned pair in
+both modes. Fallback tests simulate GPU failures; they do not exhaust real VRAM.
 For repeatable visual checks, run
 `python scripts/evaluate_source_preservation.py source.png edit1.png edit2.png --tag before`
 before changing the implementation, then repeat with `--tag after`. Native PNGs,
@@ -322,6 +335,56 @@ value 100 and multiple 64, and connect `value` to an INT input or a value viewer
 Queue each rounding mode and check 64/128, then try exact multiples and save/
 reload the workflow. Automated tests:
 `python -m pytest --confcutdir=tests tests/test_integer_multiples.py`.
+
+## mAI image post effects
+
+Location: `mAI / Image`. Registered as `MAIImagePostEffects`.
+General image finishing using ComfyUI's existing PyTorch; no new dependencies.
+Input: `image` (IMAGE). Output: `image` (IMAGE), with unchanged dimensions,
+batch order, floating dtype and alpha. Supports grayscale, RGB and RGBA.
+
+Controls apply in this order:
+
+| Input | Default | Behavior |
+| --- | --- | --- |
+| `enabled` | true | False bypasses processing exactly. |
+| `exposure` | 0 | -5 to +5 stops; +1 doubles RGB values. |
+| `contrast` | 1 | 0–3 multiplier around middle gray (0.5). |
+| `lightness` | 0 | -1 to +1 additive brightness offset, not HSL lightness. |
+| `saturation` | 1 | 0–3 multiplier; 0 makes RGB grayscale; ignored for grayscale input. |
+| `gamma` | 1 | 0.1–5; values above 1 brighten midtones using `RGB ** (1/gamma)`. |
+| `blur` | 0 | Gaussian spread in native pixels, 0–32; replicated borders. |
+| `sharpen` | 0 | 0–3 unsharp-mask amount; fixed Gaussian spread of 1 pixel. |
+| `strength` | 1 | 0–1 blend between original and processed color. |
+| `device` | auto | `auto`, `gpu`, or `cpu`. |
+
+All effects default to neutral; neutral settings, `enabled=false`, or
+`strength=0` return the original tensor exactly without touching CUDA.
+Active processing clamps color to 0–1 before gamma and after spatial effects.
+Alpha is copied exactly, so blur/sharpen do not spread transparency.
+
+`auto` respects ComfyUI's selected CUDA GPU (including CPU mode), otherwise
+uses CPU. Recognized CUDA memory, driver and kernel failures warn with the
+reason and retry the entire operation once on CPU. CPU output stays on CPU
+after fallback. Successful GPU processing returns to the input device;
+`cpu` forces CPU processing/output. Bypass retains the input device in every mode.
+`gpu` requires CUDA and reports failures directly. Invalid controls and unrelated
+runtime failures remain visible. No CUDA initialization occurs at node import.
+Frames process individually to bound GPU scratch memory; float16/bfloat16
+compute in float32 and float64 stays double precision.
+
+Limitations: CUDA acceleration requires a compatible PyTorch/driver installation;
+other accelerator backends use CPU. Large blur radii and high resolutions cost
+more time and memory. The full output still requires memory, and CPU fallback
+needs enough system RAM and readable inputs. A lost CUDA context can prevent
+copying GPU-resident inputs. Effects operate on normalized display RGB, not HDR
+or scene-linear color. Sharpening can emphasize noise and halos.
+
+Test in ComfyUI: restart and refresh, add **mAI image post effects**, then connect
+**Load Image → mAI image post effects → Preview Image**. Queue defaults to verify
+an unchanged image. Try `contrast=1.2`, `lightness=0.05`, and `blur=2` individually;
+compare `auto` and `cpu`, then test `enabled=false`, a batch, and save/reload.
+Automated tests: `python -m pytest tests/test_image_post_effects.py`.
 
 ## mAI image blur
 
@@ -1636,7 +1699,7 @@ and rounding both output dimensions to a configurable pixel multiple.
 Inputs:
 
 * `image`
-* `target_megapixels` (float from `0.2` through `2.0` MP, default `1.0`, UI step `0.01`; accepts values such as `1.25`)
+* `target_megapixels` (float from `0.2` through `8.0` MP, default `1.0`, UI step `0.01`; accepts values such as `1.25`)
 * `resize_mode` (`Target megapixels` or `Short side`)
 * optional `short_side` (positive integer, default `768`; used only in short-side mode)
 * optional `multiple_of` (positive integer, default `32`; applies in both modes)
@@ -1652,6 +1715,9 @@ Default behavior:
 * Calculates a proportional target size, then rounds width and height to the nearest multiples of `multiple_of`, with a minimum of one multiple.
 * Missing optional inputs use `short_side=768` and `multiple_of=32` for existing workflows.
 * Uses the selected resampling algorithm without cropping; defaults to Lanczos if omitted.
+* Resizes on ComfyUI's selected CUDA GPU by default, including Lanczos, with CPU execution when CUDA is unavailable or ComfyUI runs in CPU mode.
+* GPU memory, driver, and kernel failures warn and retry once on CPU. Successful GPU resizing returns to the input device; CPU fallback returns CPU output.
+* Uses the pack's floating-point tensor resize kernels. Lanczos avoids Pillow's 8-bit conversion, so pixels can differ slightly from older versions. Floating dtype is preserved; Lanczos and bicubic output is clamped to 0–1.
 * Supports image batches.
 
 With `Short side` selected, the megapixel value is ignored. The editable
@@ -1669,6 +1735,7 @@ Known limitations:
 * Grid rounding can change the requested short-side size and introduce an aspect-ratio difference.
 * The selected megapixel value is approximate because valid output dimensions are discrete.
 * Large target dimensions can require substantial image memory.
+* CPU recovery needs enough system RAM and readable input tensors; a broken CUDA context can prevent copying GPU inputs to CPU. Other accelerator backends use CPU.
 
 Testing: run `python -m pytest tests/test_minimax_h3.py`. In ComfyUI, restart and
 add or reload this node under `mAI / Image`. For a 1920 × 1080 input, choose
@@ -1677,6 +1744,9 @@ add or reload this node under `mAI / Image`. For a 1920 × 1080 input, choose
 output and node registration (`MAIPrepareImageForMinimaxH3`) are unchanged.
 Switch `resize_algorithm` to compare resampling; the output dimensions stay the same.
 Select `Target megapixels` and enter `1.25` to verify the editable float target.
+Enter `8.0` with a 2048 × 1024 input to verify the maximum target produces 4096 × 2048.
+Test both resize modes on a CUDA-enabled ComfyUI run, then launch with `--cpu`
+and verify both still work. Automated recovery tests simulate CUDA failures.
 
 ## mAI Composite Layer
 
