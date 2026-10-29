@@ -232,14 +232,25 @@ def _validate_image(image, name):
 
 
 def _preview(image, size, cv2):
+    import torch
     import torch.nn.functional as functional
 
-    # Reduce on the input device before transferring to CPU. Full-resolution
-    # image data only crosses to CPU when an accepted transform needs a warp.
-    rgb = functional.interpolate(
-        image[..., :3].detach().movedim(-1, 0)[None].float(),
-        size=size, mode="bilinear", align_corners=False, antialias=True,
-    )[0].movedim(0, -1).clamp(0, 1).cpu().numpy()
+    samples = image[..., :3].detach().movedim(-1, 0)[None]
+
+    def resize(samples):
+        return functional.interpolate(
+            samples.float(), size=size, mode="bilinear",
+            align_corners=False, antialias=True,
+        )[0].movedim(0, -1).clamp(0, 1).cpu().numpy()
+
+    # CPU inputs never initialize CUDA. For accelerator inputs, reduce before
+    # transferring when possible; retry on CPU for OOM or unsupported kernels.
+    try:
+        rgb = resize(samples)
+    except (torch.OutOfMemoryError, NotImplementedError):
+        if samples.device.type == "cpu":
+            raise
+        rgb = resize(samples.to(device="cpu"))
     return cv2.cvtColor(np.rint(rgb * 255).astype(np.uint8), cv2.COLOR_RGB2GRAY)
 
 

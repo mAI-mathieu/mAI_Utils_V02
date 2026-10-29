@@ -329,3 +329,61 @@ def test_auto_frontend_visibility_and_saved_workflows():
     script = Path(__file__).with_name("pixel_drift_fix_frontend.mjs")
     result = subprocess.run([executable, str(script)], capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("mode", ["manual", "auto"])
+def test_cpu_only_execution_never_uses_cuda_and_preserves_skipped_frames(monkeypatch, mode):
+    source = tensor(scene())
+    edited = torch.cat((tensor(drift(scene())), tensor(scene(88))))
+
+    def unexpected_cuda(*args, **kwargs):
+        raise AssertionError("CPU-only execution must not initialize or use CUDA")
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    for name in ("init", "_lazy_init", "current_device", "synchronize", "empty_cache"):
+        monkeypatch.setattr(torch.cuda, name, unexpected_cuda)
+    output, report = MAIPixelDriftFix().run(source, edited, mode=mode)
+    assert output.device.type == "cpu" and output.dtype == edited.dtype
+    assert output.shape == edited.shape and torch.isfinite(output).all()
+    assert "Image 1: corrected" in report and "Image 2: corrected" not in report
+    assert torch.equal(output[1], edited[1])
+    region = np.s_[16:-16, 16:-16]
+    assert torch.mean(torch.abs(output[0][region] - source[0][region])) < 0.02
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")
+@pytest.mark.parametrize("failure", [torch.OutOfMemoryError, NotImplementedError])
+@pytest.mark.parametrize("mode", ["manual", "auto"])
+def test_accelerator_preview_failure_retries_on_cpu(monkeypatch, failure, mode):
+    import torch.nn.functional as functional
+
+    source, edited = tensor(scene()), tensor(drift(scene()))
+    expected, _ = fix_pixel_drift(source, edited, mode=mode)
+    source, edited = source.cuda(), edited.cuda()
+    interpolate = functional.interpolate
+    calls = []
+
+    def failing_gpu_resize(samples, *args, **kwargs):
+        calls.append(samples.device.type)
+        if samples.device.type == "cuda":
+            raise failure("Simulated accelerator preview failure")
+        return interpolate(samples, *args, **kwargs)
+
+    monkeypatch.setattr(functional, "interpolate", failing_gpu_resize)
+    output, report = fix_pixel_drift(source, edited, mode=mode)
+    assert calls == ["cuda", "cpu", "cuda", "cpu"]
+    assert "corrected" in report and output.device == edited.device
+    torch.testing.assert_close(output.cpu(), expected, atol=0.01, rtol=0.01)
+
+
+def test_cpu_resize_errors_are_not_silently_hidden(monkeypatch):
+    import torch.nn.functional as functional
+
+    source, edited = tensor(scene()), tensor(drift(scene()))
+
+    def failing_resize(*args, **kwargs):
+        raise NotImplementedError("Simulated CPU resize failure")
+
+    monkeypatch.setattr(functional, "interpolate", failing_resize)
+    with pytest.raises(NotImplementedError, match="CPU resize failure"):
+        fix_pixel_drift(source, edited, mode="auto")

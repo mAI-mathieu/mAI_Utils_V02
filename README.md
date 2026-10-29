@@ -60,6 +60,14 @@ long side. Accepted warps resample floating-point edited pixels once at native
 resolution, with replicated edge pixels; source pixels are never composited.
 RGB and RGBA supported; alpha follows the warp and does not drive detection.
 
+CPU support: both Auto and Manual work with CPU tensors without CUDA or a GPU;
+no device selector is needed. Feature matching and perspective correction use
+CPU OpenCV. Preview resizing uses the input device when available and retries on
+CPU if that accelerator runs out of memory or lacks the required kernel. Output
+still returns to the edited input's device and dtype. Returning a GPU output
+requires enough memory for that tensor; this fallback does not recover a lost
+device or hide unrelated execution errors.
+
 Limitations: this is conservative geometric matching, not scene understanding.
 Extensive edits, smooth images, repeating patterns and very small changes at high
 resolution may be skipped. Similar but distinct scenes may still match; no heuristic
@@ -75,6 +83,8 @@ Leave `mode=auto`, preview `image` and inspect `alignment_info` with a text disp
 node. Try a small shift with a localized edit, then an unrelated picture: the latter should pass
 through unchanged. Switch Auto/Manual and save/reload to check mode persistence.
 It can precede **mAI image preserve source** for same-size pairs.
+For a CPU-only check, run ComfyUI with its `--cpu` option and queue the same pair;
+Auto correction and unrelated-image passthrough should behave the same.
 Automated tests: `python -m pytest --confcutdir=tests tests/test_pixel_drift.py`.
 
 ## mAI image preserve source
