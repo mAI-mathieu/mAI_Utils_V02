@@ -23,6 +23,7 @@ from .nodes.mask_fill import MAIMaskFill
 from .nodes.mask_outline import MAIMaskOutline
 from .nodes.mask_smart_crop import MAIMaskSmartCrop
 from .nodes.mask_smart_stitch import MAIMaskSmartStitch
+from .nodes.pixel_drift_fix import MAIPixelDriftFix
 from .nodes.prepare_image_for_minimax_h3 import MAIPrepareImageForMinimaxH3
 from .nodes.random_line_node import MAIRandomLine
 from .nodes.save_text_file_node import MAISaveTextFile
@@ -77,6 +78,7 @@ NODE_CLASS_MAPPINGS = {
     "MAIMaskOutline": MAIMaskOutline,
     "MAIMaskSmartCrop": MAIMaskSmartCrop,
     "MAIMaskSmartStitch": MAIMaskSmartStitch,
+    "MAIPixelDriftFix": MAIPixelDriftFix,
     "MAIPrepareImageForMinimaxH3": MAIPrepareImageForMinimaxH3,
     "MAIRandomLine": MAIRandomLine,
     "MAISaveTextFile": MAISaveTextFile,
@@ -114,6 +116,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MAIMaskOutline": "mAI mask outline",
     "MAIMaskSmartCrop": "mAI Mask Smart Crop",
     "MAIMaskSmartStitch": "mAI Mask Smart Stitch",
+    "MAIPixelDriftFix": "mAI pixel drift fix",
     "MAIPrepareImageForMinimaxH3": "mAI prepare image for Minimax H3",
     "MAIRandomLine": "mAI Random Line",
     "MAISaveTextFile": "mAI Save Text File",

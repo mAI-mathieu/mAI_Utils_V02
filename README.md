@@ -5,6 +5,60 @@ ComfyUI custom node pack for small, reusable mAI utility nodes.
 Install this folder under ComfyUI's `custom_nodes` directory, then restart ComfyUI.
 The currently registered nodes are listed below.
 
+## mAI pixel drift fix
+
+Location: `mAI / Image`. Registered as `MAIPixelDriftFix`.
+Conservatively realigns an image-model edit to the source's framing using a
+global perspective transform. Inspired by
+[ComfyUI-PixelDriftFix](https://github.com/Mozer/ComfyUI-PixelDriftFix), with
+additional checks before any output pixels are changed. No models or network calls.
+
+Inputs:
+
+* `source_image` (IMAGE): reference image sent to the image-edit model.
+* `edited_image` (IMAGE): model result to align, or pass through unchanged.
+* `min_similarity`: default **0.60**. Required fraction of usable tiles with
+  matching grayscale structure after alignment. Higher rejects more ambiguous
+  pairs; lower permits larger edits. Range 0.30–1.0. This is a structural
+  agreement measure, not a semantic similarity probability.
+* `max_drift`: default **0.15**. Maximum corner movement relative to image width
+  and height; includes translation, rotation, scale and perspective. Range 0.01–0.30.
+
+Outputs, in order: `image` (IMAGE) and `alignment_info` (STRING, one decision
+per batch pair with reason, structural similarity and inlier count).
+
+Default behavior: reciprocal SIFT matching, RANSAC, at least 12 consistent matches,
+55% match agreement, and matching points spread across at least 20% of each image
+and four grid cells. The candidate transform must have safe geometry, preserve
+enough image structure across an 8×8 tile grid, and improve alignment. A small
+shared logo alone is insufficient. Already aligned, unrelated, featureless,
+excessively reframed or uncertain pairs return the **edited image exactly**.
+Intended local edits and color changes are allowed when sufficient structure remains.
+
+Output always keeps the **edited image's resolution, channels, floating dtype and
+device**, including mixed corrected/skipped batches. Different source sizes are
+normalized to the edit's frame for comparison. Singleton batches broadcast; other
+batch mismatches raise an error. Analysis runs on CPU at up to 1024 pixels on the
+long side. Accepted warps resample floating-point edited pixels once at native
+resolution, with replicated edge pixels; source pixels are never composited.
+RGB and RGBA supported; alpha follows the warp and does not drive detection.
+
+Limitations: this is conservative geometric matching, not scene understanding.
+Extensive edits, smooth images, repeating patterns and very small changes at high
+resolution may be skipped. Similar but distinct scenes may still match; no heuristic
+can guarantee rejection of every different picture. Global perspective correction
+cannot repair local/nonrigid warping. Resampling may soften detail and repeat thin
+edge strips. Missing OpenCV raises a useful dependency error at execution without
+preventing other nodes from loading. Requires OpenCV with SIFT (`requirements.txt`);
+no scikit-image or extra neural model required.
+
+Test in ComfyUI: restart and refresh, add **mAI pixel drift fix**, connect the image
+sent to your edit model to `source_image` and the decoded result to `edited_image`.
+Preview `image` and inspect `alignment_info` with a text display node. Try a small
+shift with a localized edit, then an unrelated picture: the latter should pass
+through unchanged. It can precede **mAI image preserve source** for same-size pairs.
+Automated tests: `python -m pytest --confcutdir=tests tests/test_pixel_drift.py`.
+
 ## mAI image preserve source
 
 Location: `mAI / Image`. Registered as `MAIImagePreserveSource`.
