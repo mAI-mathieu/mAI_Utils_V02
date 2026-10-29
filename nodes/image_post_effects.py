@@ -7,11 +7,13 @@ import torch
 
 try:
     from ..utils.image_post_effects import (
-        POST_EFFECT_CONTROLS, apply_image_post_effects, post_effects_bypassed, validate_post_effects,
+        DETAIL_CONTROLS, POST_EFFECT_CONTROLS, POST_EFFECT_PRESETS, apply_image_post_effects,
+        post_effects_bypassed, prepare_effect_mask, validate_post_effects,
     )
 except ImportError:
     from utils.image_post_effects import (
-        POST_EFFECT_CONTROLS, apply_image_post_effects, post_effects_bypassed, validate_post_effects,
+        DETAIL_CONTROLS, POST_EFFECT_CONTROLS, POST_EFFECT_PRESETS, apply_image_post_effects,
+        post_effects_bypassed, prepare_effect_mask, validate_post_effects,
     )
 
 
@@ -55,7 +57,8 @@ class MAIImagePostEffects:
     RETURN_TYPES = ("IMAGE",)
     RETURN_NAMES = ("image",)
     DESCRIPTION = (
-        "Contrast, lightness, exposure, saturation, gamma, Gaussian blur and sharpening. "
+        "Tone, color, blur, texture, clarity and controlled sharpening. Prepare for refinement "
+        "adds restrained luminance detail before VAE encoding and low-denoise sampling, including after upscaling. "
         "Defaults preserve the image exactly. Auto uses ComfyUI's selected CUDA GPU "
         "and retries hardware failures on CPU. Alpha stays unchanged."
     )
@@ -67,16 +70,31 @@ class MAIImagePostEffects:
                              "step": step, "tooltip": tooltip})
             for name, (default, minimum, maximum, step, tooltip) in POST_EFFECT_CONTROLS.items()
         }
+        detail_controls = {
+            name: ("FLOAT", {"default": default, "min": minimum, "max": maximum,
+                             "step": step, "tooltip": tooltip})
+            for name, (default, minimum, maximum, step, tooltip) in DETAIL_CONTROLS.items()
+        }
         return {"required": {
             "image": ("IMAGE",),
             "enabled": ("BOOLEAN", {"default": True}),
             **controls,
             "device": (["auto", "gpu", "cpu"], {"default": "auto",
                        "tooltip": "Auto accelerates with CUDA and falls back to CPU. GPU requires CUDA. CPU forces CPU output."}),
+        }, "optional": {
+            "preset": (list(POST_EFFECT_PRESETS), {"default": "Manual", "tooltip":
+                       "Prepare for refinement overrides tone/color/blur and detail controls with gentle defaults. Strength, detail_scale, enabled and mask still apply. Manual uses all sliders."}),
+            **detail_controls,
+            "luminance_only": ("BOOLEAN", {"default": False, "tooltip":
+                               "Process texture, clarity and sharpening in luminance, with gamut protection. The refinement preset enables this automatically."}),
+            "effect_mask": ("MASK", {"tooltip":
+                            "Optional image-size effect mask. Black keeps original pixels exactly, white applies all effects. One mask broadcasts across the batch."}),
         }}
 
-    def run(self, image, enabled=True, device="auto", **controls):
-        settings = validate_post_effects(image, enabled, **controls)
+    def run(self, image, enabled=True, device="auto", effect_mask=None, preset="Manual",
+            luminance_only=False, **controls):
+        settings = validate_post_effects(image, enabled, preset, luminance_only, **controls)
+        effect_mask = prepare_effect_mask(effect_mask, image.shape)
         if device not in ("auto", "gpu", "cpu"):
             raise ValueError(f"Unknown post effects device: {device}")
         if post_effects_bypassed(enabled, settings):
@@ -86,7 +104,8 @@ class MAIImagePostEffects:
             compute_device = resolve_post_effects_device(image.device, device)
             output_device = "cpu" if compute_device.type == "cpu" else image.device
             return (apply_image_post_effects(
-                image, compute_device=compute_device, output_device=output_device, **settings,
+                image, compute_device=compute_device, output_device=output_device,
+                effect_mask=effect_mask, **settings,
             ),)
         except RuntimeError as exc:
             if device != "auto" or (
@@ -100,5 +119,5 @@ class MAIImagePostEffects:
         # Retry outside the handler to release failed GPU scratch tensors.
         # Keep CPU output so fallback never allocates on a failing GPU again.
         return (apply_image_post_effects(
-            image, compute_device="cpu", output_device="cpu", **settings,
+            image, compute_device="cpu", output_device="cpu", effect_mask=effect_mask, **settings,
         ),)

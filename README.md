@@ -354,9 +354,53 @@ Controls apply in this order:
 | `saturation` | 1 | 0–3 multiplier; 0 makes RGB grayscale; ignored for grayscale input. |
 | `gamma` | 1 | 0.1–5; values above 1 brighten midtones using `RGB ** (1/gamma)`. |
 | `blur` | 0 | Gaussian spread in native pixels, 0–32; replicated borders. |
-| `sharpen` | 0 | 0–3 unsharp-mask amount; fixed Gaussian spread of 1 pixel. |
+| `sharpen` | 0 | 0–3 unsharp-mask amount; spread is controlled by `sharpen_radius × detail_scale`. |
 | `strength` | 1 | 0–1 blend between original and processed color. |
 | `device` | auto | `auto`, `gpu`, or `cpu`. |
+
+Detail controls are optional and appended after the original widgets, keeping
+existing saved widget values, input names and output order intact. Missing new
+controls retain the original processing, including RGB sharpening at a 1-pixel
+spread. New nodes also default to `preset=Manual` and neutral effects.
+
+| Optional input | Default | Behavior |
+| --- | --- | --- |
+| `preset` | Manual | Manual uses all sliders; Prepare for refinement uses the recipe below. |
+| `texture` | 0 | 0–2 fine detail contrast between Gaussian spreads of 0.7 and 2 pixels. |
+| `clarity` | 0 | 0–1 medium detail contrast using an 8-pixel Gaussian spread. |
+| `detail_scale` | 1 | 0.25–4 multiplier for texture, clarity and sharpening spreads in output pixels. |
+| `sharpen_radius` | 1 | 0.1–8 pixel Gaussian spread before multiplying by `detail_scale`. |
+| `detail_threshold` | 0 | 0–0.1 soft threshold for all three detail effects; suppresses faint differences to reduce noise amplification. |
+| `halo_suppression` | 0 | 0–1 blend toward limiting each detail stage to its local 3×3 extrema. Higher reduces edge overshoot. |
+| `luminance_only` | false | Applies texture, clarity and sharpening to brightness; preserves channel differences and limits changes to available RGB gamut. |
+| `effect_mask` | absent | Image-size floating MASK; black protects original pixels exactly, white allows effects, gray blends. |
+
+Detail order: texture → clarity → sharpening, after blur and before strength.
+`luminance_only` affects these three detail operations; exposure, contrast,
+lightness, saturation, gamma and blur keep their existing behavior.
+Masks accept `[H, W]` or `[B, H, W]`. One mask broadcasts across an image batch;
+otherwise batch sizes must match. Dimensions must match the image; masks are
+not resized automatically. Finite mask values are clamped to 0–1. The mask is
+applied after processing, so surrounding pixels can influence filtered pixels
+inside it; outside black areas remain exact. An absent mask applies effects
+everywhere. Alpha is always preserved separately.
+
+**Prepare for refinement** is intended for an image already resized by another
+node, before VAE encoding and a low-denoise pass. It uses `texture=0.20`,
+`clarity=0.12`, `sharpen=0.25`, `sharpen_radius=0.8`, `detail_threshold=0.01`,
+`halo_suppression=0.8` and `luminance_only=true`, with neutral tone/color and
+blur disabled. This preset overrides those sliders, including tone/color/blur;
+`strength`, `detail_scale`, `enabled`, `device` and `effect_mask` still apply.
+Switch to Manual to customize the full recipe. All overrides happen in Python,
+so API execution works without a frontend extension.
+
+Suggested workflow: **Upscale using another node → mAI image post effects →
+VAE Encode → low-denoise sampler → VAE Decode**. Start with the refinement
+preset and `detail_scale=1`. The node does not know the original upscale factor:
+increase scale only when features need a wider processing radius. A value of 2
+doubles the filter spreads; it does not resize the image. Strong upscaler
+sharpening may need lower strength rather than a larger radius. In Manual,
+raise `detail_threshold` to reduce amplification of faint upscaler noise.
 
 All effects default to neutral; neutral settings, `enabled=false`, or
 `strength=0` return the original tensor exactly without touching CUDA.
@@ -372,18 +416,29 @@ after fallback. Successful GPU processing returns to the input device;
 runtime failures remain visible. No CUDA initialization occurs at node import.
 Frames process individually to bound GPU scratch memory; float16/bfloat16
 compute in float32 and float64 stays double precision.
+The first CUDA execution can incur substantial library initialization cost;
+compare repeated runs when checking GPU speed.
 
 Limitations: CUDA acceleration requires a compatible PyTorch/driver installation;
 other accelerator backends use CPU. Large blur radii and high resolutions cost
 more time and memory. The full output still requires memory, and CPU fallback
 needs enough system RAM and readable inputs. A lost CUDA context can prevent
 copying GPU-resident inputs. Effects operate on normalized display RGB, not HDR
-or scene-linear color. Sharpening can emphasize noise and halos.
+or scene-linear color. Detail enhancement strengthens existing information;
+it cannot recover missing texture or guarantee artifact-free refinement.
+Thresholding and halo suppression reduce artifacts but can also suppress real
+low-contrast detail. The filters do not detect skin, text or semantic subjects;
+protect those areas with a mask when needed. Strong enhancement can still
+emphasize noise and halos. No grain or artificial texture is added.
 
 Test in ComfyUI: restart and refresh, add **mAI image post effects**, then connect
 **Load Image → mAI image post effects → Preview Image**. Queue defaults to verify
 an unchanged image. Try `contrast=1.2`, `lightness=0.05`, and `blur=2` individually;
 compare `auto` and `cpu`, then test `enabled=false`, a batch, and save/reload.
+For refinement, choose **Prepare for refinement** after your upscaler, compare
+strength 0 versus 0.5–1 using the same sampler seed/settings, and judge the final
+decoded image. Connect a mask to check black protection, then save/reload an
+older workflow to confirm original widget values are retained.
 Automated tests: `python -m pytest tests/test_image_post_effects.py`.
 
 ## mAI image blur

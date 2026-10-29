@@ -15,7 +15,9 @@ import torch
 import nodes.image_post_effects as node_module
 from nodes.image_post_effects import MAIImagePostEffects, resolve_post_effects_device
 from utils.image_blur import blur_image
-from utils.image_post_effects import POST_EFFECT_CONTROLS, apply_image_post_effects
+from utils.image_post_effects import (
+    DETAIL_CONTROLS, POST_EFFECT_CONTROLS, apply_image_post_effects, validate_post_effects,
+)
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -109,16 +111,16 @@ def test_large_blur_on_tiny_images_keeps_constant_colors(height, width):
     torch.testing.assert_close(result, image)
 
 
-@pytest.mark.parametrize("name", list(POST_EFFECT_CONTROLS))
+@pytest.mark.parametrize("name", list(POST_EFFECT_CONTROLS) + list(DETAIL_CONTROLS))
 @pytest.mark.parametrize("value", [math.nan, math.inf, True, "1", None])
 def test_rejects_nonfinite_or_nonnumeric_controls(name, value):
     with pytest.raises(ValueError, match=name):
         MAIImagePostEffects().run(torch.zeros(1, 2, 3, 3), **{name: value})
 
 
-@pytest.mark.parametrize("name", list(POST_EFFECT_CONTROLS))
+@pytest.mark.parametrize("name", list(POST_EFFECT_CONTROLS) + list(DETAIL_CONTROLS))
 def test_rejects_out_of_range_controls(name):
-    _, minimum, maximum, _, _ = POST_EFFECT_CONTROLS[name]
+    _, minimum, maximum, _, _ = {**POST_EFFECT_CONTROLS, **DETAIL_CONTROLS}[name]
     for value in (minimum - 0.01, maximum + 0.01):
         with pytest.raises(ValueError, match=name):
             apply_image_post_effects(torch.zeros(1, 2, 3, 3), **{name: value})
@@ -319,3 +321,195 @@ def test_node_auto_accelerates_cpu_input_on_selected_gpu_and_cpu_mode_moves_outp
     cpu_result, = MAIImagePostEffects().run(image.to(device), device="cpu", **controls)
     assert compute_devices[-1].type == cpu_result.device.type == "cpu"
     torch.testing.assert_close(gpu_result, cpu_result, atol=2e-5, rtol=2e-5)
+
+
+def test_new_controls_preserve_released_widget_order_and_old_defaults():
+    schema = MAIImagePostEffects.INPUT_TYPES()
+    assert list(schema["required"]) == ["image", "enabled", "contrast", "lightness", "exposure",
+                                         "saturation", "gamma", "blur", "sharpen", "strength", "device"]
+    assert list(schema["optional"]) == ["preset", *DETAIL_CONTROLS, "luminance_only", "effect_mask"]
+    image = torch.rand(1, 13, 15, 3)
+    # A released workflow with only sharpen set keeps the original RGB algorithm.
+    expected = (image + 0.8 * (image - blur_image(image, 1))).clamp(0, 1)
+    actual = apply_image_post_effects(image, sharpen=0.8)
+    torch.testing.assert_close(actual, expected)
+    assert apply_image_post_effects(image, luminance_only=True, detail_scale=4,
+                                    sharpen_radius=8, detail_threshold=0.1, halo_suppression=1) is image
+
+
+@pytest.mark.parametrize("control", ["texture", "clarity"])
+def test_detail_controls_enhance_real_variation_and_keep_constants(control):
+    coordinate = torch.arange(65, dtype=torch.float64)
+    wave = 0.5 + 0.05 * torch.sin(coordinate * (2 * math.pi / 12))
+    image = wave.reshape(1, 1, 65, 1).expand(1, 5, -1, -1)
+    result = apply_image_post_effects(image, **{control: 0.5})
+    assert result[..., 8:-8, :].std() > image[..., 8:-8, :].std()
+    constant = torch.full((2, 3, 4, 3), 0.4, dtype=torch.float64)
+    torch.testing.assert_close(apply_image_post_effects(constant, **{control: 1}), constant)
+
+
+def test_detail_threshold_protects_faint_noise_but_keeps_stronger_features():
+    generator = torch.Generator().manual_seed(12)
+    image = torch.full((1, 17, 19, 1), 0.4) + (torch.rand(1, 17, 19, 1, generator=generator) - 0.5) * 0.004
+    settings = dict(texture=0.5, clarity=0.2, sharpen=0.8)
+    protected = apply_image_post_effects(image, detail_threshold=0.01, **settings)
+    torch.testing.assert_close(protected, image)
+    boosted = apply_image_post_effects(image, **settings)
+    assert boosted.std() > protected.std()
+    image[:, 6:11, 8:12] += 0.1
+    result = apply_image_post_effects(image, detail_threshold=0.01, **settings)
+    assert not torch.allclose(result, image)
+
+
+def test_halo_suppression_prevents_new_extrema_at_a_step_edge():
+    image = torch.full((1, 7, 31, 1), 0.2)
+    image[:, :, 15:] = 0.8
+    raw = apply_image_post_effects(image, sharpen=1)
+    assert raw.min() < image.min() and raw.max() > image.max()
+    partial = apply_image_post_effects(image, sharpen=1, halo_suppression=0.5)
+    limited = apply_image_post_effects(image, sharpen=1, halo_suppression=1)
+    assert raw.min() < partial.min() < limited.min()
+    assert raw.max() > partial.max() > limited.max()
+    torch.testing.assert_close(limited, image)
+
+
+def test_luminance_detail_preserves_channel_differences_and_stays_in_gamut():
+    y = torch.linspace(0.2, 0.65, 31).reshape(1, 1, 31, 1).expand(1, 7, -1, -1)
+    image = torch.cat((y + 0.2, y, y - 0.15), -1)
+    image[:, :, 12:17] += 0.1
+    result = apply_image_post_effects(image, texture=0.5, clarity=0.3, sharpen=0.8,
+                                      luminance_only=True, halo_suppression=0.5)
+    assert not torch.allclose(result, image)
+    torch.testing.assert_close(result[..., 0] - result[..., 1], image[..., 0] - image[..., 1])
+    torch.testing.assert_close(result[..., 1] - result[..., 2], image[..., 1] - image[..., 2])
+    assert 0 <= result.min() <= result.max() <= 1
+
+
+def test_detail_scale_multiplies_sharpening_radius_in_output_pixels():
+    image = torch.full((1, 7, 31, 1), 0.4, dtype=torch.float64)
+    image[:, :, 15] = 0.5
+    narrow = apply_image_post_effects(image, sharpen=0.5, sharpen_radius=0.5)
+    broad = apply_image_post_effects(image, sharpen=0.5, sharpen_radius=0.5, detail_scale=4)
+    reference = apply_image_post_effects(image, sharpen=0.5, sharpen_radius=2)
+    torch.testing.assert_close(broad, reference)
+    assert broad[0, 3, 15, 0] > narrow[0, 3, 15, 0]
+    assert broad[0, 3, 12, 0] < narrow[0, 3, 12, 0]
+
+
+def test_refinement_preset_is_reproducible_and_honors_strength_and_detail_scale():
+    image = torch.rand(2, 13, 17, 4)
+    actual = apply_image_post_effects(image, preset="Prepare for refinement", strength=0.7, detail_scale=2)
+    expected = apply_image_post_effects(image, texture=0.2, clarity=0.12, sharpen=0.25,
+                                        sharpen_radius=0.8, detail_threshold=0.01,
+                                        halo_suppression=0.8, luminance_only=True,
+                                        strength=0.7, detail_scale=2)
+    torch.testing.assert_close(actual, expected)
+    overridden = apply_image_post_effects(image, preset="Prepare for refinement", exposure=3, blur=5,
+                                          texture=2, saturation=0, strength=0.7, detail_scale=2)
+    torch.testing.assert_close(overridden, expected)
+    assert torch.equal(actual[..., 3], image[..., 3])
+    assert apply_image_post_effects(image, preset="Prepare for refinement", strength=0) is image
+
+
+@pytest.mark.parametrize("mask_shape", ["hw", "singleton", "batch"])
+def test_effect_mask_exact_protection_fractional_blend_and_batch_broadcast(mask_shape):
+    image = torch.rand(2, 7, 9, 4, dtype=torch.float64)
+    image[:, :2, :, :3] -= 1  # Protected values must survive even outside 0..1.
+    mask = torch.ones(7, 9, dtype=torch.float64)
+    mask[:2] = 0
+    mask[2:4] = 0.3
+    if mask_shape != "hw":
+        mask = mask.unsqueeze(0)
+    if mask_shape == "batch":
+        mask = mask.expand(2, -1, -1).clone()
+        mask[1] = 0
+    controls = dict(preset="Prepare for refinement", strength=0.6)
+    processed = apply_image_post_effects(image, **controls)
+    result = apply_image_post_effects(image, effect_mask=mask, **controls)
+    expanded = mask if mask.ndim == 3 else mask.unsqueeze(0)
+    expected = torch.lerp(image[..., :3], processed[..., :3], expanded.unsqueeze(-1))
+    torch.testing.assert_close(result[..., :3], expected)
+    assert torch.equal(result[:, :2], image[:, :2])
+    assert torch.equal(result[..., 3], image[..., 3])
+    assert torch.equal(result, MAIImagePostEffects().run(image, effect_mask=mask, device="cpu", **controls)[0])
+
+
+@pytest.mark.parametrize("mask,message", [
+    (torch.zeros(1, 3, 4, 1), "shape"),
+    (torch.zeros(3, 4, dtype=torch.uint8), "floating"),
+    (torch.zeros(3, 5), "dimensions"),
+    (torch.zeros(3, 3, 4), "batch"),
+    (torch.full((3, 4), math.nan), "finite"),
+])
+def test_rejects_invalid_effect_masks(mask, message):
+    with pytest.raises(ValueError, match=message):
+        MAIImagePostEffects().run(torch.rand(2, 3, 4, 3), texture=0.5, effect_mask=mask, device="cpu")
+
+
+def test_mask_values_are_clamped_and_none_means_full_effect():
+    image = torch.rand(1, 3, 4, 3)
+    actual = apply_image_post_effects(image, lightness=0.1, effect_mask=torch.full((3, 4), 2.0))
+    torch.testing.assert_close(actual, apply_image_post_effects(image, lightness=0.1, effect_mask=None))
+    protected = apply_image_post_effects(image, lightness=0.1, effect_mask=torch.full((3, 4), -1.0))
+    assert torch.equal(protected, image)
+
+
+def test_rejects_unknown_preset_and_nonboolean_luminance_mode():
+    image = torch.rand(1, 3, 4, 3)
+    with pytest.raises(ValueError, match="preset"):
+        validate_post_effects(image, preset="Unknown")
+    with pytest.raises(ValueError, match="luminance_only"):
+        validate_post_effects(image, luminance_only=1)
+
+
+@pytest.mark.parametrize("channels", [1, 3, 4])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32, torch.float64])
+def test_refinement_preserves_dtype_shape_alpha_and_tiny_images(channels, dtype):
+    image = torch.full((2, 1, 3, channels), 0.4, dtype=dtype).transpose(1, 2)
+    original = image.clone()
+    result = apply_image_post_effects(image, preset="Prepare for refinement")
+    assert result.shape == image.shape and result.dtype == dtype
+    torch.testing.assert_close(result, image)
+    assert torch.equal(image, original)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32, torch.float64])
+def test_refinement_mask_and_detail_controls_match_real_cuda(dtype):
+    image = torch.rand(2, 23, 29, 4).to(dtype)
+    mask = torch.linspace(0, 1, 29).expand(23, -1).to(dtype)
+    settings = dict(preset="Prepare for refinement", strength=0.7, detail_scale=1.5)
+    expected = apply_image_post_effects(image, effect_mask=mask, **settings)
+    for index in range(torch.cuda.device_count()):
+        device = torch.device("cuda", index)
+        for source in (image, image.to(device)):
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                actual = apply_image_post_effects(source, effect_mask=mask.to(device),
+                                                  compute_device=device, **settings)
+            assert actual.device == source.device and actual.dtype == dtype
+            torch.testing.assert_close(actual.cpu(), expected, atol=2e-3, rtol=2e-3)
+            assert torch.equal(actual[..., 3].cpu(), image[..., 3])
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")
+def test_refinement_fallback_keeps_gpu_mask_and_preset_settings(monkeypatch):
+    image = torch.rand(2, 17, 19, 4, device="cuda", dtype=torch.float16)
+    mask = torch.rand(17, 19, device="cuda")
+    mask[:4] = 0
+    real_apply = node_module.apply_image_post_effects
+    monkeypatch.setattr(node_module, "resolve_post_effects_device", lambda *args: image.device)
+    calls = []
+    def fail_gpu(image, **kwargs):
+        calls.append(kwargs)
+        if torch.device(kwargs["compute_device"]).type == "cuda":
+            raise torch.OutOfMemoryError("CUDA out of memory")
+        return real_apply(image, **kwargs)
+    monkeypatch.setattr(node_module, "apply_image_post_effects", fail_gpu)
+    with pytest.warns(RuntimeWarning, match="retrying on CPU"):
+        actual, = MAIImagePostEffects().run(image, preset="Prepare for refinement", effect_mask=mask,
+                                           detail_scale=2, strength=0.8)
+    expected = real_apply(image.cpu(), preset="Prepare for refinement", effect_mask=mask.cpu(),
+                           detail_scale=2, strength=0.8)
+    assert len(calls) == 2 and actual.device.type == "cpu"
+    torch.testing.assert_close(actual, expected)
+    assert torch.equal(actual[:, :4], image[:, :4].cpu())
