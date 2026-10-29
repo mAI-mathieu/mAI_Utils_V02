@@ -1,3 +1,4 @@
+from .nodes.audio_fallback import MAIAudioFallback
 from .nodes.auto_seamless_loop import MAIAutoSeamlessLoop
 from .nodes.background_lighting_match import MAIBackgroundLightingMatch
 from .nodes.cinematic_post import mAI_CinematicPost
@@ -55,6 +56,7 @@ except CropAndStitchDependencyError as exc:
         )
 
 NODE_CLASS_MAPPINGS = {
+    "MAIAudioFallback": MAIAudioFallback,
     "MAIAutoSeamlessLoop": MAIAutoSeamlessLoop,
     "mAI_CinematicPost": mAI_CinematicPost,
     "MAIBackgroundLightingMatch": MAIBackgroundLightingMatch,
@@ -95,6 +97,7 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
+    "MAIAudioFallback": "mAI audio fallback",
     "MAIAutoSeamlessLoop": "mAI auto seamless loop",
     "mAI_CinematicPost": "mAI Cinematic Post",
     "MAIBackgroundLightingMatch": "mAI background lighting match",

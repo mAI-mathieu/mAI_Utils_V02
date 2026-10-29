@@ -5,6 +5,30 @@ ComfyUI custom node pack for small, reusable mAI utility nodes.
 Install this folder under ComfyUI's `custom_nodes` directory, then restart ComfyUI.
 The currently registered nodes are listed below.
 
+## mAI audio fallback
+
+Location: `mAI / Utils`. Registered as `MAIAudioFallback`.
+Passes populated ComfyUI audio through unchanged, or supplies blank audio when
+the optional input is disconnected, `None`, has no waveform, or has zero samples.
+Existing silent audio still counts as populated audio and passes through.
+
+Inputs: optional `audio` (AUDIO), `frame_count` (INT, default 120), and `fps`
+(FLOAT, default 24). Output: `audio` (AUDIO).
+Fallback audio is a CPU float32 tensor shaped `[1, 2, samples]` (stereo), at
+48,000 Hz, lasting `frame_count / fps` seconds rounded to the nearest sample
+(minimum one sample). Defaults produce five seconds of silence. Existing audio
+keeps its original duration, sample rate, channels, device, and metadata.
+Malformed populated audio raises a clear error. Long fallback durations require
+proportionally more system RAM. This cannot recover an upstream node failure.
+Uses PyTorch already supplied by ComfyUI; no new dependency or frontend is needed.
+
+Test in ComfyUI: restart, add **mAI audio fallback**, connect its output to an
+audio consumer such as **mAI GPU Video Combine**, and queue without an audio
+input. Connect a video loader's `audio`, `frame_count`, and `fps` outputs and
+try videos with and without an audio stream. A video with audio keeps its track;
+a video without audio receives silence matching its frame duration.
+Automated checks: `python -m pytest tests/test_audio_fallback.py -q`.
+
 ## mAI video compare
 
 Location: `mAI / Image`. Registered as `MAIVideoCompare`.
@@ -1540,8 +1564,8 @@ Known limitations:
 * The complete decoded frame sequence is held in memory; long or high-resolution
   videos can require substantial RAM.
 * Variable-frame-rate sources report their average frame rate.
-* A video without an audio stream returns no `AUDIO` value. Nodes that require
-  audio should only be connected when the source contains audio.
+* A video without an audio stream returns no `AUDIO` value. Use **mAI audio
+  fallback** with the loader's `frame_count` and `fps` for consumers that require audio.
 
 ## mAI trim frame sequence
 
