@@ -5,6 +5,62 @@ ComfyUI custom node pack for small, reusable mAI utility nodes.
 Install this folder under ComfyUI's `custom_nodes` directory, then restart ComfyUI.
 The currently registered nodes are listed below.
 
+## mAI H3 media references
+
+Location: `mAI / Input`. Registered as `MAIH3MediaReferences`.
+An ordered media holder for ComfyUI's native **MiniMax H3 Reference to Video**.
+Drop several pictures, audio files or videos into its preview panel, use **Add
+files**, or **Choose folder** (includes subfolders). Folder contents are sorted
+by relative filename; unsupported files are skipped. New files append to the
+list. Images have thumbnails; audio and video have playback controls. Drag a
+card's grip to reorder, use its arrow buttons, or remove it with ×. Reordering
+changes assignment to numbered output slots within each media type. Cards show
+their exact output name; existing cables stay connected to those numbered slots.
+
+Connect identically named outputs to the native H3 node: `ref_image_0` through
+`ref_image_8` (IMAGE), `ref_video_0` through `ref_video_2` (IMAGE frame batches),
+`ref_video_audio_0` through `ref_video_audio_2` (AUDIO soundtracks paired with
+the same-numbered video), and `ref_audio_0` through `ref_audio_2` (standalone
+AUDIO). Outputs remain fixed in that order, followed by `manifest` (STRING).
+Connect the slots you use; unused slots return `None`, which the native H3 node
+explicitly skips. The default empty holder returns 18 empty slots and `[]`.
+The JSON manifest lists names, assigned outputs, and prompt tags after decoding.
+Native H3 presents pictures first, videos with any soundtracks second, and
+standalone audio last. Prompt tags are `<Picture 1>`, `<Video 1>`, `<Audio 1>`,
+etc.; video soundtracks consume audio tag numbers before standalone audio.
+Arbitrary interleaving of media types in the H3 presentation is not supported.
+
+Inputs: `media_manifest` (saved JSON, edited by the panel), `max_seconds`
+(default 15, range 0.25–15; audio/video load from the start), `video_max_side`
+(default 768; video resize preserves aspect ratio and never upscales), and
+`include_video_audio` (default on). Videos are sampled at **24 fps** using frame
+timestamps and trimmed to H3's `17*n+5` frame alignment. Soundtracks end at the
+same trimmed duration. Audio decodes to CPU float32 stereo at 48 kHz; images
+retain their original size, convert to RGB and respect EXIF orientation.
+
+Supported files: PNG/JPEG/WebP/BMP; WAV/MP3/FLAC/M4A/OGG/AAC;
+MP4/MOV/WebM/MKV/AVI/M4V. Limits are 9 images, 3 videos and 3 standalone audio
+files; 512 MiB per uploaded file. Media is copied into this pack's ignored
+`reference_media/` folder, deduplicated by content, and persists across restarts.
+Workflow JSON stores references and order, **not the media bytes**. Copy that
+folder too when moving workflows. Removing a card does not delete stored media
+because other workflows may use it. Browser previews play the source file;
+execution applies the duration and size limits. Some codecs cannot preview in a
+browser but can still decode in ComfyUI; broken media raises an execution error.
+Videos shorter than five frames at 24 fps are rejected. Long videos and high
+`video_max_side` values can use considerable system RAM. Uses Pillow, NumPy,
+PyTorch, PyAV and aiohttp already supplied by ComfyUI; no new dependency.
+
+Test in ComfyUI: restart and refresh the browser, add **mAI H3 media references**,
+drop two images plus audio and a video, then drag the second image above the
+first. Connect matching named outputs to **MiniMax H3 Reference to Video** and
+queue your existing H3 workflow. Verify that image order swaps, the soundtrack
+stays paired with its video, and save/reload preserves previews and order.
+This node targets the native H3 tensor sockets, not `mAI_H3_Sol`'s custom socket.
+All code and uploaded files stay inside this pack; ComfyUI core is unchanged.
+Automated checks: run `python -m pytest tests/test_h3_reference_*.py -q` with a
+shell that expands wildcards, or run `python -m pytest -k h3_reference -q`.
+
 ## mAI audio fallback
 
 Location: `mAI / Utils`. Registered as `MAIAudioFallback`.

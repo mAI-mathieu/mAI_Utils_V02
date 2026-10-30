@@ -18,6 +18,7 @@ Thumbs.db
 temp/
 output/
 input/
+reference_media/
 
 # IDE files
 .vscode/

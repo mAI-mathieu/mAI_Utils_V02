@@ -9,6 +9,7 @@ from .nodes.fast_gpu_resize import MAIFastGPUResize
 from .nodes.frame_loop_fade import MAIFrameLoopFade
 from .nodes.gpu_video_combine import MAIGPUVideoCombine
 from .nodes.h3_to_ltx_frame_adapter import MAIH3ToLTXFrameAdapter
+from .nodes.h3_media_references import MAIH3MediaReferences
 from .nodes.image_aspect_ratio import MAIImageAspectRatio
 from .nodes.image_batch import MAIImageBatch
 from .nodes.image_blur import MAIImageBlur
@@ -37,6 +38,9 @@ from .nodes.type_converter_node import MAITypeConverterNode
 from .nodes.video_compare import MAIVideoCompare
 from .nodes.video_loader import MAIVideoLoader
 from .utils.cropandstitch_dependency import CropAndStitchDependencyError
+from .utils.h3_reference_routes import register_reference_routes
+
+register_reference_routes()
 
 try:
     from .nodes.inpaint_crop_separate_stitch_mask import (
@@ -67,6 +71,7 @@ NODE_CLASS_MAPPINGS = {
     "MAIFrameLoopFade": MAIFrameLoopFade,
     "MAIGPUVideoCombine": MAIGPUVideoCombine,
     "MAIH3ToLTXFrameAdapter": MAIH3ToLTXFrameAdapter,
+    "MAIH3MediaReferences": MAIH3MediaReferences,
     "MAIImageAspectRatio": MAIImageAspectRatio,
     "MAIImageBatch": MAIImageBatch,
     "MAIImageBlur": MAIImageBlur,
@@ -108,6 +113,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MAIFrameLoopFade": "mAI frame loop fade",
     "MAIGPUVideoCombine": "mAI GPU Video Combine",
     "MAIH3ToLTXFrameAdapter": "mAI H3 to LTX Frame Adapter",
+    "MAIH3MediaReferences": "mAI H3 media references",
     "MAIImageAspectRatio": "mAI image aspect ratio",
     "MAIImageBatch": "mAI image batch",
     "MAIImageBlur": "mAI image blur",
