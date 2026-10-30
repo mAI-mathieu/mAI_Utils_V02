@@ -9,8 +9,45 @@ The scope follows the basic functionality of
 [VHS Video Combine](https://github.com/kosinkadink/ComfyUI-VideoHelperSuite#video-combine):
 IMAGE frames, optional AUDIO, frame rate, filename prefix, output/temp saving,
 quality, ping-pong, loops, workflow metadata and a video preview. This node
-exports MP4 using NVENC or explicit software codecs; it does not reproduce GIF/WebP, arbitrary format JSON,
+exports MP4 using NVENC with automatic CPU fallback or explicit software codecs;
+it does not reproduce GIF/WebP, arbitrary format JSON,
 latent/VAE decoding or VHS's incremental meta-batch protocol.
+
+## H.264 quality presets
+
+The optional `h264_quality_preset` widget is appended after existing widgets so
+saved positional widget values stay aligned. Its default, `custom`, keeps the
+numeric `quality` control and is also used when the input is absent.
+For `h264_nvenc` and `libx264`, `low`, `medium`, and `high` resolve to CQ/CRF
+28, 23, and 18 respectively. Lower numbers request higher quality and generally
+larger files. These are quality shortcuts; the p1–p7 encoding speed preset is
+unchanged. Other codecs keep using their numeric quality value.
+
+Python resolves presets before encoding, so CPU fallback inherits the resolved
+quality. Equal CQ/CRF numbers can produce different quality and sizes across
+GPU and CPU encoders. No frontend script is needed. Test by selecting H.264,
+trying each quality preset on a short clip, then selecting `custom` and changing
+the numeric quality. Reload an older workflow to verify its manual settings.
+
+## Preview mute memory
+
+`web/js/gpu_video_combine.js` remembers the native player's mute state in the
+node property `maiVideoPreviewMuted`. Each `MAIGPUVideoCombine` node keeps its
+own setting, which is serialized with the workflow. A fresh node uses ComfyUI's
+native mute default until the user changes it. Encoding and saved audio are unaffected.
+
+The extension observes newly mounted video elements and captures media events,
+restoring the preference after reruns, source changes and workflow loading.
+Canvas previews are identified by the node's video container/DOM widget;
+Vue previews use the active graph and their node-ID ancestor. Existing lifecycle
+callbacks are preserved. Shared listeners and the observer are released when
+the last tracked node is removed. No ComfyUI core files are patched.
+
+Refresh the browser after updating. Mute, rerun, unmute and rerun to check both
+states; save/reload the workflow and check again. Browser playback/autoplay
+policies still apply. Run frontend regression checks with
+`node tests/gpu_video_combine_frontend.mjs`; these use DOM/media-event mocks
+and cover replacement players, source changes, node isolation and cleanup.
 
 ## Encoding path
 
@@ -51,8 +88,16 @@ All subprocess calls use a known FFmpeg executable, fixed argument lists and
 exposed. Importing the pack or querying the node schema does not launch
 FFmpeg, test a GPU, or initialize CUDA. Capability checks occur at execution.
 FFmpeg error output is captured in a temporary file to avoid stderr pipe
-deadlocks; failed encoding reports the actual diagnostics. Software encoding
-requires selecting a software codec; no automatic fallback hides NVENC failures.
+deadlocks; failed encoding reports the actual diagnostics. An unavailable NVENC
+encoder or an NVENC encoding failure logs a warning and falls back to the matching
+software encoder: H.264 → `libx264`, HEVC → `libx265`, AV1 → `libsvtav1`.
+Fallback converts bounded source slices on CPU; ping-pong/repeats also run on CPU
+without allocating GPU selection buffers. It preserves timing, optional audio,
+metadata and output paths, and publishes only a complete video. The matching
+software encoder must be present. CPU encoding is slower and CRF quality can
+differ from the same NVENC CQ number. If fallback fails, both diagnostics are
+reported. Invalid inputs, filesystem errors and cancellation propagate without
+starting fallback.
 
 Automatic chunks target 64 MiB of packed NV12 (up to 32 frames), not a strict
 total-memory limit. Float conversion, source slices, selected indices and
@@ -75,8 +120,9 @@ is not confused with cached PyTorch memory. No ComfyUI core code is changed.
 An explicit FFmpeg `CUDA_ERROR_OUT_OF_MEMORY` retries once after the failed
 encoder and temporary files have been cleaned up. The retry requests all
 ComfyUI-managed models on the encoding/conversion devices to be offloaded and
-converts one frame per chunk. Codec/device settings stay the same. Other errors
-and cancellation propagate immediately; a second OOM propagates its diagnostics.
+converts one frame per chunk. Codec/device settings stay the same for that retry.
+A second NVENC OOM switches to CPU fallback, as does a PyTorch CUDA conversion OOM.
+Other NVENC failures fall back immediately; cancellation propagates immediately.
 Cache cleanup runs after success/failure/cancellation. Traceback locations are
 preserved, but inactive worker locals are cleared on errors to release scratch.
 

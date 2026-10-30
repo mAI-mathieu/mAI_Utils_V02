@@ -1,4 +1,4 @@
-"""Chunked tensor-to-FFmpeg bridge for NVENC and explicit software encoding.
+"""Chunked tensor-to-FFmpeg bridge with automatic NVENC-to-CPU fallback.
 
 Only fixed FFmpeg argument lists are executed, with shell=False. No image
 files, shell scripts, VHS imports or per-frame conversion loops are used.
@@ -25,13 +25,23 @@ from .gpu_memory import gpu_memory_scope, video_memory_requirements
 
 NVENC_CODECS = ("h264_nvenc", "hevc_nvenc", "av1_nvenc")
 SOFTWARE_CODECS = ("libx264", "libx265", "libsvtav1")
+CPU_FALLBACK_CODECS = {
+    "h264_nvenc": "libx264",
+    "hevc_nvenc": "libx265",
+    "av1_nvenc": "libsvtav1",
+}
 CODECS = NVENC_CODECS + SOFTWARE_CODECS
 PRESETS = tuple(f"p{i}" for i in range(1, 8))
 SOFTWARE_PRESETS = ("ultrafast", "superfast", "veryfast", "medium", "slow", "slower", "veryslow")
 SVT_AV1_PRESETS = (12, 10, 8, 6, 5, 4, 3)
+H264_QUALITY_PRESETS = {"low": 28, "medium": 23, "high": 18}
 
 
-class NVENCOutOfMemoryError(RuntimeError):
+class NVENCError(RuntimeError):
+    """The requested NVENC encoder is unavailable or failed to encode."""
+
+
+class NVENCOutOfMemoryError(NVENCError):
     """FFmpeg explicitly reported insufficient CUDA memory."""
 
 
@@ -46,6 +56,17 @@ class VideoEncodeOptions:
     pingpong: bool = False
     loop_count: int = 0
     trim_to_audio: bool = False
+
+
+def resolve_h264_quality(codec, quality, quality_preset="custom"):
+    """Resolve H.264 CQ/CRF shortcuts without changing other codecs or speed."""
+    if quality_preset == "custom":
+        return quality
+    if quality_preset not in H264_QUALITY_PRESETS:
+        raise ValueError(f"Unknown H.264 quality preset: {quality_preset}")
+    if codec in ("h264_nvenc", "libx264"):
+        return H264_QUALITY_PRESETS[quality_preset]
+    return quality
 
 
 def _integer(value, name, minimum, maximum):
@@ -183,9 +204,8 @@ def check_nvenc_support(executable, codec):
                           capture_output=True, text=True, timeout=15, shell=False, **_process_flags())
     description = info.stdout + info.stderr
     if info.returncode or f"Encoder {codec} " not in description or "nv12" not in description:
-        raise RuntimeError(f"This FFmpeg build does not support {codec} with NV12 input. "
-                           "Use an NVENC-enabled build; no CPU fallback is performed. "
-                           "B200/B300 have no NVENC hardware; select an explicit software codec instead.")
+        raise NVENCError(f"This FFmpeg build does not support {codec} with NV12 input. "
+                         "Use an NVENC-enabled build or the matching software encoder.")
 
 
 def check_software_support(executable, codec):
@@ -302,7 +322,7 @@ def _pack_nv12(frames, width, height):
 @torch.inference_mode()
 def encode_video(frames, output_path, options=None, audio=None, metadata=None,
                  check_interrupt=None, on_progress=None):
-    """Prepare CUDA headroom, encode, release scratch; retry NVENC OOM once."""
+    """Try NVENC, retry its OOM once, then fall back to CPU when needed."""
     options = options or VideoEncodeOptions()
     validate_options(options)
     source_count, width, height = get_video_dimensions(frames)
@@ -324,18 +344,62 @@ def encode_video(frames, output_path, options=None, audio=None, metadata=None,
                     stack.enter_context(gpu_memory_scope(device, required, force_offload=bool(attempt)))
                 return _encode_video(frames, output_path, options, audio, metadata,
                                      check_interrupt, on_progress)
-        except NVENCOutOfMemoryError:
+        except NVENCOutOfMemoryError as exc:
             if attempt:
-                raise
+                hardware_error = exc
+                break
             if check_interrupt:
                 check_interrupt()
             logging.warning("mAI GPU Video Combine: NVENC ran out of CUDA memory; retrying once "
                             "after requesting ComfyUI model offloading, with one-frame conversion chunks.")
             options = replace(options, chunk_size=1)
+        except (NVENCError, torch.cuda.OutOfMemoryError) as exc:
+            if options.codec not in NVENC_CODECS:
+                raise
+            hardware_error = exc
+            break
+
+    # Kept outside the GPU scopes so CPU encoding reserves no CUDA budget.
+    return _encode_cpu_fallback(frames, output_path, options, audio, metadata,
+                                check_interrupt, on_progress, hardware_error)
+
+
+def _encode_cpu_fallback(frames, output_path, options, audio, metadata,
+                         check_interrupt, on_progress, hardware_error):
+    if check_interrupt:
+        check_interrupt()
+    software = replace(options, codec=CPU_FALLBACK_CODECS[options.codec])
+    logging.warning("mAI GPU Video Combine: %s failed; falling back to %s on CPU. %s",
+                    options.codec, software.codec, hardware_error)
+    try:
+        return _encode_video(frames, output_path, software, audio, metadata,
+                             check_interrupt, on_progress, cpu_conversion=True)
+    except RuntimeError as exc:
+        raise RuntimeError(f"NVENC failed: {hardware_error}\n"
+                           f"CPU fallback ({software.codec}) also failed: {exc}") from exc
+
+
+def _cpu_playback_chunk(frames, start, end, pingpong):
+    """Copy contiguous source slices; reverse/repeat only on CPU to save VRAM."""
+    source_count = len(frames)
+    cycle = playback_frame_count(source_count, pingpong)
+    parts = []
+    while start < end:
+        offset = start % cycle
+        if offset < source_count:
+            length = min(end - start, source_count - offset)
+            part = frames[offset:offset + length].to(device="cpu")
+        else:
+            first = cycle - offset
+            length = min(end - start, first)
+            part = frames[first - length + 1:first + 1].to(device="cpu").flip(0)
+        parts.append(part)
+        start += length
+    return parts[0] if len(parts) == 1 else torch.cat(parts)
 
 
 def _encode_video(frames, output_path, options=None, audio=None, metadata=None,
-                  check_interrupt=None, on_progress=None):
+                  check_interrupt=None, on_progress=None, *, cpu_conversion=False):
     """Encode one MP4; return encoded frame count and duration.
 
     The fixed FFmpeg child consumes chunked NV12 through stdin. Temporary PCM
@@ -383,7 +447,9 @@ def _encode_video(frames, output_path, options=None, audio=None, metadata=None,
                         if check_interrupt:
                             check_interrupt()
                         end = min(count, start + chunk_size)
-                        if not options.pingpong and options.loop_count == 0:
+                        if cpu_conversion:
+                            chunk = _cpu_playback_chunk(frames, start, end, options.pingpong)
+                        elif not options.pingpong and options.loop_count == 0:
                             chunk = frames[start:end]
                         else:
                             indices = playback_indices(start, end, source_count, options.pingpong, frames.device)
@@ -413,11 +479,12 @@ def _encode_video(frames, output_path, options=None, audio=None, metadata=None,
                 if process.returncode != 0 or pipe_error is not None:
                     stderr.seek(0)
                     details = stderr.read()[-8000:].decode("utf-8", errors="replace").strip()
-                    error_type = NVENCOutOfMemoryError if hardware and "CUDA_ERROR_OUT_OF_MEMORY" in details else RuntimeError
+                    error_type = NVENCError if hardware else RuntimeError
+                    if hardware and "CUDA_ERROR_OUT_OF_MEMORY" in details:
+                        error_type = NVENCOutOfMemoryError
                     hint = ("Check the NVIDIA driver, codec support, frame dimensions and available GPU memory. "
                             "Linux containers must expose libnvidia-encode.so.1 (NVIDIA video capability). "
-                            "B200/B300 have no NVENC; select libx264, libx265 or libsvtav1. "
-                            "No CPU fallback is performed." if hardware else
+                            "B200/B300 have no NVENC." if hardware else
                             "Check FFmpeg software codec support, frame dimensions and available CPU memory.")
                     label = "NVENC" if hardware else "Software"
                     raise error_type(f"{label} video encoding failed ({options.codec}). {hint}\n"

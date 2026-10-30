@@ -742,13 +742,15 @@ Automated tests: `python -m pytest tests/test_image_logic_check.py`.
 Location: `mAI / IO`. Registered as `MAIGPUVideoCombine`.
 
 Combines an IMAGE frame batch with optional ComfyUI AUDIO into an MP4 using
-NVIDIA NVENC or a selected software encoder. The basic frame/audio, saving and playback controls are inspired
+NVIDIA NVENC with automatic CPU fallback, or a selected software encoder.
+The basic frame/audio, saving and playback controls are inspired
 by [VideoHelperSuite's Video Combine](https://github.com/kosinkadink/ComfyUI-VideoHelperSuite#video-combine);
 this node is implemented independently and does not require VHS.
 
 Inputs: `frames` (IMAGE), optional `audio` (AUDIO), `frame_rate`,
 `filename_prefix`, `codec`, `quality`, `preset`, `pingpong`, `loop_count`,
-`trim_to_audio`, `save_output`, `save_metadata`, `gpu_device`, and `chunk_size`.
+`trim_to_audio`, `save_output`, `save_metadata`, `gpu_device`, `chunk_size`, and
+optional `h264_quality_preset` (defaults to `custom`).
 Defaults: 24 FPS, prefix `video/mAI`, `h264_nvenc`, quality 23, preset p4,
 no ping-pong/repeats, full video duration, save to output with workflow metadata,
 GPU -1 (first available), automatic chunks. Connect the loader's `fps` output
@@ -764,6 +766,9 @@ Outputs, in order:
 
 The node saves the video and returns ComfyUI's native animated/video preview.
 `save_output=false` writes a preview file in ComfyUI's temp directory instead.
+The preview remembers mute/unmute per node across reruns and saves that setting
+with the workflow. This covers native canvas and Vue node previews. Refresh the
+browser after updating to load the frontend extension. Only preview playback is affected.
 Filename prefixes support subfolders and ComfyUI's standard `%width%`, `%height%`,
 `%year%`, `%month%`, `%day%`, `%hour%`, `%minute%`, `%second%` placeholders.
 Unique suffixes prevent concurrent runs from overwriting videos. MP4 workflow
@@ -779,8 +784,29 @@ H.264 MP4 is the most broadly usable preview choice. HEVC/AV1 playback depends
 on the browser/player. `gpu_device` is FFmpeg's NVENC GPU index, not a torch
 device selector; -1 chooses an available encoder device. Software codecs ignore it.
 
+For H.264 (`h264_nvenc` or `libx264`), `h264_quality_preset` offers:
+
+| Preset | CQ / CRF | Effect |
+| --- | --- | --- |
+| `custom` (default) | Existing `quality` value | Preserves manual settings and older workflows |
+| `low` | 28 | Lower quality, generally smaller files |
+| `medium` | 23 | Balanced quality and file size |
+| `high` | 18 | Higher quality, generally larger files |
+
+Named presets override only `quality`; the existing p1–p7 speed `preset` stays
+unchanged. They also apply to H.264 CPU fallback. Other codecs ignore this
+widget and use `quality`. Missing preset inputs behave as `custom`.
+
+If NVENC is unavailable or encoding fails, the node logs the reason and retries
+on CPU: `h264_nvenc` → `libx264`, `hevc_nvenc` → `libx265`, `av1_nvenc` →
+`libsvtav1`. Fallback keeps timing, audio, metadata, paths and sockets, and converts
+frame chunks on CPU, including ping-pong/repeats. It requires the matching
+software encoder in FFmpeg and can be much slower. The same quality number is
+used as CRF; output size/quality can differ from NVENC. If both encoders fail,
+the error includes both diagnostics. Cancellation and invalid input still stop execution.
+
 Frames are clipped to [0,1] and converted to 8-bit, limited-range BT.709 NV12
-in tensor chunks on their existing device (CUDA for GPU frames). NVENC performs
+in tensor chunks on their existing device (CPU during automatic fallback). NVENC performs
 video compression on the GPU; software codecs compress on CPU and deinterleave
 NV12 to planar YUV420P. FFmpeg stdin requires a CPU byte buffer, so CUDA frames transfer
 to CPU and FFmpeg uploads them to its encoder. Audio PCM, AAC encoding and
@@ -808,15 +834,16 @@ Requires FFmpeg with the chosen encoder. Discovery order: `MAI_FFMPEG_EXE`,
 `IMAGEIO_FFMPEG_EXE`, PATH, then the `imageio-ffmpeg` package installed by this
 pack's requirements. Overrides must identify an executable, without command
 arguments. NVENC additionally requires an NVENC-capable NVIDIA GPU/driver;
-unavailable codecs/drivers produce a clear error without automatic software
-fallback. Software codecs work with CPU or GPU input tensors. GPU dimension limits still apply,
+unavailable codecs/drivers trigger the matching CPU fallback.
+Software codecs work with CPU or GPU input tensors. GPU dimension limits still apply,
 especially to tiny images or very large resolutions. The full input batch remains
 in memory; chunking bounds conversion buffers. Before encoding, unused CUDA
 cache is released and ComfyUI is asked to offload models if free VRAM is below
 the estimated conversion budget plus 2 GiB for NVENC's separate CUDA context.
 After success, failure or cancellation, unused cache is released again.
 An explicit FFmpeg `CUDA_ERROR_OUT_OF_MEMORY` triggers one retry after requesting
-model offloading on the affected GPUs, with one-frame conversion chunks.
+model offloading on the affected GPUs, with one-frame conversion chunks. A second
+NVENC OOM or a PyTorch CUDA conversion OOM switches to CPU fallback.
 Models may reload later in the workflow. This cannot free live frame tensors or
 memory owned by other processes and does not guarantee against OOM.
 Software encoding reserves only tensor conversion memory, with no NVENC context
@@ -849,10 +876,17 @@ Test in ComfyUI: restart, search **mAI GPU Video Combine**, connect `frames`,
 `audio` and `fps` from **mAI video loader** (or frames from **mAI Fast GPU Resize**),
 then queue. Check the video preview, sound, first/last frame, and saved MP4 in
 `output/video`. Disconnect audio to check silent output; try ping-pong/repeats
-and `trim_to_audio`. Save/reload the workflow. There are no GIF/WebP/custom VHS
+and `trim_to_audio`. To test fallback, select `h264_nvenc` with an unavailable
+`gpu_device`; expect a warning and a completed H.264 MP4 via `libx264`, then restore
+the device setting. Try `h264_quality_preset` at `low`, `medium`, and `high`, or
+choose `custom` to use the numeric quality control. Save/reload the workflow.
+Mute the preview, rerun and check that it stays muted; unmute and rerun again.
+Save/reload the workflow to check that the last mute setting is restored.
+There are no GIF/WebP/custom VHS
 format presets, latent decoding or VHS meta-batch inputs in this initial version.
 
 Tests: `python -m pytest tests/test_video_encoding.py tests/test_gpu_video_combine.py`.
+Preview mute regression checks: `node tests/gpu_video_combine_frontend.mjs`.
 Real NVENC tests are opt-in: set `MAI_TEST_NVENC=1` and run those tests with
 FFmpeg/ffprobe on PATH. Software integration tests use `MAI_TEST_FFMPEG=1`.
 Detailed validation and implementation notes:

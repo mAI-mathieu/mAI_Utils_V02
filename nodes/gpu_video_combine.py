@@ -6,13 +6,13 @@ import uuid
 
 try:
     from ..utils.video_encoding import (
-        CODECS, PRESETS, VideoEncodeOptions, encode_video, get_video_dimensions,
-        validate_filename_prefix,
+        CODECS, H264_QUALITY_PRESETS, PRESETS, VideoEncodeOptions, encode_video,
+        get_video_dimensions, resolve_h264_quality, validate_filename_prefix,
     )
 except ImportError:
     from utils.video_encoding import (
-        CODECS, PRESETS, VideoEncodeOptions, encode_video, get_video_dimensions,
-        validate_filename_prefix,
+        CODECS, H264_QUALITY_PRESETS, PRESETS, VideoEncodeOptions, encode_video,
+        get_video_dimensions, resolve_h264_quality, validate_filename_prefix,
     )
 
 
@@ -23,9 +23,9 @@ class MAIGPUVideoCombine:
     RETURN_TYPES = ("VHS_FILENAMES", "STRING", "INT", "FLOAT")
     RETURN_NAMES = ("filenames", "file_path", "frame_count", "duration")
     DESCRIPTION = (
-        "Combine IMAGE frames and optional AUDIO into MP4 using NVIDIA NVENC or an explicit software codec. "
-        "B200/B300 have no NVENC: select libx264, libx265 or libsvtav1. "
-        "RGB-to-NV12 conversion runs on the tensor's device. FFmpeg input crosses a CPU buffer. "
+        "Combine IMAGE frames and optional AUDIO into MP4 using NVIDIA NVENC or a software codec. "
+        "NVENC failures automatically fall back to the matching CPU encoder (libx264, libx265 or libsvtav1). "
+        "RGB-to-NV12 conversion runs on the tensor's device, or CPU during fallback. FFmpeg input crosses a CPU buffer. "
         "Odd dimensions are padded right/bottom to even sizes."
     )
 
@@ -38,7 +38,7 @@ class MAIGPUVideoCombine:
                 "filename_prefix": ("STRING", {"default": "video/mAI"}),
                 "codec": (list(CODECS), {"default": "h264_nvenc"}),
                 "quality": ("INT", {"default": 23, "min": 0, "max": 51,
-                                    "tooltip": "NVENC CQ or software CRF: lower is higher quality and larger files. Values differ between encoders."}),
+                                    "tooltip": "NVENC CQ or software CRF: lower is higher quality and larger files. Values differ between encoders. H.264 quality presets override this unless custom."}),
                 "preset": (list(PRESETS), {"default": "p4", "tooltip": "p1 fastest to p7 slowest. Software codecs map these to their speed presets."}),
                 "pingpong": ("BOOLEAN", {"default": False}),
                 "loop_count": ("INT", {"default": 0, "min": 0, "max": 100,
@@ -51,18 +51,25 @@ class MAIGPUVideoCombine:
                 "chunk_size": ("INT", {"default": 0, "min": 0, "max": 4096,
                                        "tooltip": "Frames converted/transferred per chunk. 0 chooses up to 64 MiB of packed pixels."}),
             },
-            "optional": {"audio": ("AUDIO",)},
+            "optional": {
+                "audio": ("AUDIO",),
+                "h264_quality_preset": (["custom", *H264_QUALITY_PRESETS], {
+                    "default": "custom",
+                    "tooltip": "H.264 only: low=28, medium=23, high=18 (CQ/CRF). Custom uses quality. Speed preset stays unchanged.",
+                }),
+            },
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
 
     def run(self, frames, frame_rate=24.0, filename_prefix="video/mAI", codec="h264_nvenc",
             quality=23, preset="p4", pingpong=False, loop_count=0, trim_to_audio=False,
             save_output=True, save_metadata=True, gpu_device=-1, chunk_size=0,
-            audio=None, prompt=None, extra_pnginfo=None):
+            audio=None, prompt=None, extra_pnginfo=None, h264_quality_preset="custom"):
         import folder_paths
 
         prefix = validate_filename_prefix(filename_prefix)
         _, width, height = get_video_dimensions(frames)
+        quality = resolve_h264_quality(codec, quality, h264_quality_preset)
         options = VideoEncodeOptions(frame_rate, codec, quality, preset, gpu_device,
                                      chunk_size, pingpong, loop_count, trim_to_audio)
         base = folder_paths.get_output_directory() if save_output else folder_paths.get_temp_directory()

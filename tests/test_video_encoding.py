@@ -14,9 +14,26 @@ from utils.video_encoding import (
     NVENC_CODECS, SOFTWARE_CODECS, VideoEncodeOptions, _metadata_text, _pack_nv12, _write_all,
     _write_audio, build_encode_command, calculate_video_timing,
     check_nvenc_support, check_software_support, encode_video, find_ffmpeg, get_video_dimensions,
-    playback_frame_count, playback_indices, validate_audio,
+    playback_frame_count, playback_indices, resolve_h264_quality, validate_audio,
     validate_filename_prefix, validate_options,
 )
+
+
+@pytest.mark.parametrize("codec", ["h264_nvenc","libx264"])
+@pytest.mark.parametrize("preset,expected", [("custom",31),("low",28),("medium",23),("high",18)])
+def test_h264_quality_shortcuts_use_cq_or_crf_and_preserve_speed(codec,preset,expected):
+    quality = resolve_h264_quality(codec,31,preset)
+    options = VideoEncodeOptions(codec=codec,quality=quality,preset="p6")
+    command = build_encode_command("ffmpeg","video.mp4",320,240,7,options)
+    quality_flag = "-cq" if codec == "h264_nvenc" else "-crf"
+    assert command[command.index(quality_flag)+1] == str(expected)
+    assert command[command.index("-preset")+1] == ("p6" if codec == "h264_nvenc" else "slower")
+
+
+def test_h264_quality_shortcuts_keep_legacy_default_and_reject_unknown_preset():
+    assert resolve_h264_quality("h264_nvenc",31) == 31
+    with pytest.raises(ValueError,match="Unknown H.264 quality preset"):
+        resolve_h264_quality("h264_nvenc",23,"ultra")
 
 
 @pytest.mark.parametrize("count,pingpong,loops,expected", [(1,True,2,3),(2,True,0,2),(4,False,1,8),(4,True,0,6),(4,True,2,18)])
@@ -256,7 +273,7 @@ def test_existing_output_is_preserved(tmp_path):
 def test_missing_nvenc_is_clear(monkeypatch):
     from types import SimpleNamespace
     monkeypatch.setattr(subprocess,"run",lambda *a,**k:SimpleNamespace(returncode=0,stdout="",stderr="Codec not found"))
-    with pytest.raises(RuntimeError,match="no CPU fallback"):
+    with pytest.raises(RuntimeError,match="matching software encoder"):
         check_nvenc_support("ffmpeg","h264_nvenc")
 
 
@@ -275,21 +292,20 @@ def test_cuda_oom_retries_once_after_scope_cleanup_with_same_codec(tmp_path,monk
     monkeypatch.setattr(encoding,"gpu_memory_scope",scope)
     monkeypatch.setattr(encoding,"video_memory_requirements",lambda *args: {torch.device("cuda:1"): 100})
     calls = []
-    def encode(frames,path,options,*args):
+    def encode(frames,path,options,*args,**kwargs):
         calls.append(options)
+        assert kwargs.get("cpu_conversion", False) == (options.codec in SOFTWARE_CODECS)
         if len(calls) <= failures:
             raise encoding.NVENCOutOfMemoryError("CUDA_ERROR_OUT_OF_MEMORY")
         return 3,3/24
     monkeypatch.setattr(encoding,"_encode_video",encode)
     options = VideoEncodeOptions(codec="hevc_nvenc",chunk_size=3)
     frames = torch.ones(3,4,4,3)
-    if failures == 2:
-        with pytest.raises(encoding.NVENCOutOfMemoryError):
-            encode_video(frames,tmp_path/"retry.mp4",options)
-    else:
-        assert encode_video(frames,tmp_path/"retry.mp4",options) == (3,3/24)
-    assert len(calls) == 2 and calls[0] == options
+    assert encode_video(frames,tmp_path/"retry.mp4",options) == (3,3/24)
+    assert len(calls) == failures + 1 and calls[0] == options
     assert calls[1] == replace(options,chunk_size=1)
+    if failures == 2:
+        assert calls[2] == replace(options,codec="libx265",chunk_size=1)
     assert events == [("enter",False),("exit",False),("enter",True),("exit",True)]
     assert frames.eq(1).all()
 
@@ -322,9 +338,93 @@ def test_real_ffmpeg_cuda_context_error_is_classified_and_cleaned(tmp_path,monke
             return self.returncode
     monkeypatch.setattr(subprocess,"Popen",FailedEncoder)
     with pytest.raises(encoding.NVENCOutOfMemoryError,match="CUDA_ERROR_OUT_OF_MEMORY"):
-        encode_video(torch.zeros(2,4,4,3),tmp_path/"failure.mp4")
-    assert len(calls) == 2 and all(call.stdin.closed for call in calls)
+        encoding._encode_video(torch.zeros(2,4,4,3),tmp_path/"failure.mp4")
+    assert len(calls) == 1 and all(call.stdin.closed for call in calls)
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("codec,software", [("h264_nvenc","libx264"),("hevc_nvenc","libx265"),("av1_nvenc","libsvtav1")])
+@pytest.mark.parametrize("error_type", ["nvenc", "cuda_oom"])
+def test_hardware_failure_falls_back_once_with_matching_codec_and_all_inputs(tmp_path,monkeypatch,caplog,codec,software,error_type):
+    import utils.video_encoding as encoding
+    frames = torch.zeros(3,4,4,3)
+    audio = {"waveform":torch.zeros(1,1,4800),"sample_rate":48000}
+    metadata = {"workflow":{"nodes":[]}}
+    options = VideoEncodeOptions(codec=codec,quality=19,preset="p3",pingpong=True,loop_count=1)
+    calls = []
+    def encode(batch,path,settings,sound,tags,interrupt,progress,**kwargs):
+        calls.append(settings.codec)
+        assert batch is frames and sound is audio and tags is metadata
+        assert path == tmp_path/"fallback.mp4"
+        if settings.codec == codec:
+            error = encoding.NVENCError if error_type == "nvenc" else torch.cuda.OutOfMemoryError
+            raise error("hardware unavailable")
+        assert settings == replace(options,codec=software)
+        assert kwargs == {"cpu_conversion":True}
+        return 8,8/24
+    monkeypatch.setattr(encoding,"_encode_video",encode)
+    assert encode_video(frames,tmp_path/"fallback.mp4",options,audio,metadata) == (8,8/24)
+    assert calls == [codec,software]
+    assert "hardware unavailable" in caplog.text and software in caplog.text
+
+
+@pytest.mark.parametrize("device", ["cpu","cuda"])
+@pytest.mark.parametrize("pingpong", [False,True])
+@pytest.mark.parametrize("count", [1,2,5])
+def test_cpu_playback_chunks_preserve_sequence_across_turns_and_repeats(device,pingpong,count):
+    from utils.video_encoding import _cpu_playback_chunk
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA unavailable")
+    frames = torch.arange(count,device=device)[:,None,None,None].expand(count,2,2,3)
+    before = frames.clone()
+    for start,end in ((0,1),(0,27),(3,17),(5,8)):
+        result = _cpu_playback_chunk(frames,start,end,pingpong)
+        assert result.device.type == "cpu"
+        expected = frames.cpu().index_select(0,playback_indices(start,end,count,pingpong))
+        torch.testing.assert_close(result,expected)
+    torch.testing.assert_close(frames,before)
+
+
+def test_failed_cpu_fallback_reports_both_errors_and_cleans_partial_files(tmp_path,monkeypatch):
+    import utils.video_encoding as encoding
+    monkeypatch.setattr(encoding,"find_ffmpeg",lambda:"ffmpeg")
+    monkeypatch.setattr(encoding,"check_nvenc_support",lambda *args:None)
+    monkeypatch.setattr(encoding,"check_software_support",lambda *args:None)
+    codecs = []
+    class FailedEncoder:
+        def __init__(self,command,**kwargs):
+            from pathlib import Path
+            self.stdin = io.BytesIO()
+            self.returncode = 1
+            codec = command[command.index("-c:v")+1]
+            codecs.append(codec)
+            Path(command[-1]).write_bytes(b"partial")
+            kwargs["stderr"].write(b"No capable devices found" if codec in NVENC_CODECS else b"software encoder failed")
+        def poll(self):
+            return self.returncode
+    monkeypatch.setattr(subprocess,"Popen",FailedEncoder)
+    with pytest.raises(RuntimeError) as error:
+        encode_video(torch.zeros(2,4,4,3),tmp_path/"failure.mp4")
+    assert "No capable devices found" in str(error.value)
+    assert "CPU fallback (libx264) also failed" in str(error.value)
+    assert "software encoder failed" in str(error.value)
+    assert codecs == ["h264_nvenc","libx264"]
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_cancellation_after_hardware_failure_does_not_start_cpu_fallback(tmp_path,monkeypatch):
+    import utils.video_encoding as encoding
+    calls = []
+    def encode(*args):
+        calls.append("nvenc")
+        raise encoding.NVENCError("no device")
+    def interrupt():
+        if calls:
+            raise InterruptedError("cancelled")
+    monkeypatch.setattr(encoding,"_encode_video",encode)
+    with pytest.raises(InterruptedError,match="cancelled"):
+        encode_video(torch.zeros(1,4,4,3),tmp_path/"cancelled.mp4",check_interrupt=interrupt)
+    assert calls == ["nvenc"]
 
 
 NVENC_TESTS = os.environ.get("MAI_TEST_NVENC") == "1" and shutil.which("ffmpeg") and shutil.which("ffprobe")
@@ -345,6 +445,47 @@ ffmpeg = pytest.mark.skipif(
     os.environ.get("MAI_TEST_FFMPEG") != "1" or not shutil.which("ffmpeg") or not shutil.which("ffprobe"),
     reason="Set MAI_TEST_FFMPEG=1 with FFmpeg/ffprobe for software integration tests",
 )
+
+
+@ffmpeg
+@pytest.mark.parametrize("device", ["cpu","cuda"])
+@pytest.mark.parametrize("failure", ["missing_encoder","driver_failure"])
+def test_real_automatic_cpu_fallback_with_audio_metadata_and_sequence(tmp_path,monkeypatch,device,failure):
+    import utils.video_encoding as encoding
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA unavailable")
+    frames = torch.linspace(0,1,5,device=device)[:,None,None,None].expand(5,25,31,3)
+    before = frames.clone()
+    metadata = {"workflow":{"label":"CPU fallback 雪"},"prompt":{"1":{}}}
+    audio = {"waveform":torch.zeros(1,1,4800),"sample_rate":48000}
+    actual_run = subprocess.run
+    if failure == "missing_encoder":
+        def run(command,**kwargs):
+            if "encoder=h264_nvenc" in command:
+                return SimpleNamespace(returncode=0,stdout="",stderr="Codec not found")
+            return actual_run(command,**kwargs)
+        monkeypatch.setattr(subprocess,"run",run)
+    actual_pack = encoding._pack_nv12
+    packed_devices = []
+    def pack(chunk,width,height):
+        packed_devices.append(chunk.device.type)
+        return actual_pack(chunk,width,height)
+    monkeypatch.setattr(encoding,"_pack_nv12",pack)
+    progress = []
+    output = tmp_path/"fallback.mp4"
+    options = VideoEncodeOptions(gpu_device=128,chunk_size=3,pingpong=True,loop_count=1)
+    assert encode_video(frames,output,options,audio,metadata,on_progress=lambda *p:progress.append(p)) == (16,16/24)
+    info = _probe(output)
+    video = next(s for s in info["streams"] if s["codec_type"] == "video")
+    assert video["codec_name"] == "h264" and (video["width"],video["height"]) == (32,26)
+    assert any(s["codec_type"] == "audio" for s in info["streams"])
+    assert json.loads(info["format"]["tags"]["workflow"]) == metadata["workflow"]
+    decoded = _decode(output,32,26)
+    expected = torch.tensor([0,.25,.5,.75,1,.75,.5,.25]*2)
+    torch.testing.assert_close(decoded[:,:24,:30].mean((1,2,3)),expected,atol=.04,rtol=0)
+    assert packed_devices[-6:] == ["cpu"]*6 and progress[-1] == (16,16)
+    torch.testing.assert_close(frames,before)
+    assert not list(tmp_path.glob(".mai_video_*"))
 
 
 @ffmpeg
@@ -449,9 +590,10 @@ def test_real_audio_padding_trimming_and_duration(tmp_path,audio_samples,trim,ex
 @nvenc
 def test_real_failure_and_interrupt_cleanup(tmp_path):
     destination = tmp_path/"failed.mp4"
-    with pytest.raises(RuntimeError,match="NVENC video encoding failed"):
-        encode_video(torch.zeros(2,240,320,3),destination,VideoEncodeOptions(gpu_device=128))
-    assert not destination.exists() and not list(tmp_path.glob(".mai_video_*"))
+    assert encode_video(torch.zeros(2,240,320,3),destination,VideoEncodeOptions(gpu_device=128)) == (2,2/24)
+    assert _probe(destination)["streams"][0]["codec_name"] == "h264"
+    assert not list(tmp_path.glob(".mai_video_*"))
+    destination.unlink()
     frames = torch.zeros(16,240,320,3)
     def interrupt():
         raise InterruptedError("cancelled")
