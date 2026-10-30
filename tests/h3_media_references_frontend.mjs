@@ -36,13 +36,27 @@ globalThis.testApi = {
         assert.equal(options.method, "POST");
         uploads.push(options.body.get("file"));
         if (uploads.length === failAt) return { ok: false, status: 400, text: async () => JSON.stringify({ error: "test upload failure" }) };
-        return { ok: true, json: async () => item(uploads.length) };
+        const name = uploads.at(-1).name;
+        const kind = Object.keys(config.extensions).find((key) => config.extensions[key].some((suffix) => name.toLowerCase().endsWith(suffix)));
+        return { ok: true, json: async () => ({ ...item(uploads.length, kind), name }) };
     },
 };
 const source = (await readFile(new URL("../web/js/h3_media_references.js", import.meta.url), "utf8"))
     .replace('import { app } from "../../../scripts/app.js";', "const app = globalThis.testApp;")
     .replace('import { api } from "../../../scripts/api.js";', "const api = globalThis.testApi;");
-const { H3ReferencePanel } = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
+const { H3ReferencePanel, sortReferenceItems } = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
+const unsorted = [
+    { name: "image10.png", kind: "image" }, { name: "Image2.png", kind: "image" },
+    { name: "image1.png", kind: "image" }, { name: "voice.wav", kind: "audio" },
+    { name: "clip.mp4", kind: "video" },
+];
+assert.deepEqual(sortReferenceItems(unsorted).map((entry) => entry.name), ["clip.mp4", "image1.png", "Image2.png", "image10.png", "voice.wav"]);
+assert.deepEqual(sortReferenceItems(unsorted, "name_desc").map((entry) => entry.name), ["voice.wav", "image10.png", "Image2.png", "image1.png", "clip.mp4"]);
+assert.deepEqual(sortReferenceItems(unsorted, "type").map((entry) => entry.name), ["image1.png", "Image2.png", "image10.png", "clip.mp4", "voice.wav"]);
+assert.deepEqual(sortReferenceItems(unsorted, "manual"), unsorted);
+assert.notEqual(sortReferenceItems(unsorted, "manual"), unsorted);
+assert.equal(unsorted[0].name, "image10.png", "Sorting must not mutate its input");
+assert.throws(() => sortReferenceItems(unsorted, "unknown"), /Unknown reference sort/);
 const settle = async () => { for (let i = 0; i < 25; i++) await Promise.resolve(); };
 let dirty = 0;
 const node = { graph: { change() { dirty++; } }, setDirtyCanvas() {} };
@@ -50,6 +64,7 @@ const widget = { value: JSON.stringify([item(1), item(2, "audio"), item(3), item
 const panel = new H3ReferencePanel(node, widget);
 await settle();
 assert.equal(panel.items.length, 4);
+assert.equal(panel.sortSelect.value, "name_asc");
 assert.equal(panel.folder.webkitdirectory, true);
 assert.match(panel.files.accept, /\.mp4/);
 assert.equal(panel.list.children[2].children[0].children[1].textContent, "ref_image_1 · file 3");
@@ -58,6 +73,8 @@ assert.match(panel.list.children[3].children[1].src, /^\/comfy\/mai\/h3\/referen
 panel.reorder(`${panel.token}:2`, 0);
 assert.deepEqual(panel.items.map((entry) => entry.name), ["file 3", "file 1", "file 2", "file 4"]);
 assert.equal(JSON.parse(widget.value)[0].name, "file 3");
+assert.equal(panel.sortSelect.value, "manual");
+assert.equal(node.properties.maiH3ReferenceSort, "manual");
 assert.match(panel.list.children[0].children[0].children[1].textContent, /^ref_image_0/);
 panel.reorder("another-node:0", 4);
 assert.equal(panel.items[0].name, "file 3");
@@ -68,6 +85,7 @@ panel.reorder(`${panel.token}:0`, 4);
 assert.equal(panel.items.at(-1).name, "file 1");
 const reloaded = new H3ReferencePanel(node, widget);
 assert.deepEqual(reloaded.items, panel.items);
+assert.equal(reloaded.sortMode, "manual");
 assert.notEqual(reloaded.token, panel.token, "Separate panels must reject each other's drags without requiring browser crypto");
 assert.ok(dirty >= 3);
 // Remove only detaches the selected reference, preserving all others.
@@ -133,4 +151,40 @@ registered.widgets[0].value = JSON.stringify([item(8)]);
 registered.onConfigure();
 assert.equal(registered.maiH3References.items[0].name, "file 8");
 registered.onRemoved();
+// All import methods share the default natural filename sort. Subsequent batches
+// merge into the same order, and dropdown choices affect serialized outputs.
+const sortingNode = { properties: {}, graph: { change() {} }, setDirtyCanvas() {} };
+const sortingWidget = { value: "[]" };
+const sortingPanel = new H3ReferencePanel(sortingNode, sortingWidget);
+const uploadStart = uploads.length;
+await sortingPanel.ingest(Promise.resolve([new File(["a"], "image10.png"), new File(["b"], "Image2.png"), new File(["c"], "image1.png")]));
+assert.deepEqual(uploads.slice(uploadStart).map((file) => file.name), ["image1.png", "Image2.png", "image10.png"]);
+assert.deepEqual(sortingPanel.items.map((entry) => entry.name), ["image1.png", "Image2.png", "image10.png"]);
+await sortingPanel.ingest(Promise.resolve([new File(["d"], "image0.png")]));
+assert.equal(sortingPanel.items[0].name, "image0.png");
+sortingPanel.sortSelect.value = "name_desc";
+sortingPanel.sortSelect.events.get("change")();
+assert.deepEqual(JSON.parse(sortingWidget.value).map((entry) => entry.name), ["image10.png", "Image2.png", "image1.png", "image0.png"]);
+assert.equal(sortingNode.properties.maiH3ReferenceSort, "name_desc");
+const sortedReload = new H3ReferencePanel(sortingNode, sortingWidget);
+assert.equal(sortedReload.sortSelect.value, "name_desc");
+assert.deepEqual(sortedReload.items, sortingPanel.items);
+sortingPanel.move(0, 1);
+assert.equal(sortingPanel.sortMode, "manual");
+await sortingPanel.ingest(Promise.resolve([new File(["e"], "a.png")]));
+assert.equal(sortingPanel.items.at(-1).name, "a.png", "Manual imports append without undoing the drag order");
+sortingPanel.setSortMode("type");
+await sortingPanel.ingest(Promise.resolve([new File(["v"], "video.mp4"), new File(["a"], "audio.wav")]));
+assert.deepEqual(sortingPanel.items.map((entry) => entry.kind), ["image", "image", "image", "image", "image", "video", "audio"]);
+// Disable sorting for the entire upload, including asynchronous directory reads.
+let releaseFiles;
+const pendingUpload = sortingPanel.ingest(new Promise((resolve) => { releaseFiles = resolve; }));
+assert.equal(sortingPanel.sortSelect.disabled, true);
+sortingPanel.setSortMode("name_desc");
+assert.equal(sortingPanel.sortSelect.value, "type");
+releaseFiles([new File(["x"], "image3.png")]);
+await pendingUpload;
+assert.equal(sortingPanel.sortSelect.disabled, false);
+sortingPanel.dispose();
+sortedReload.dispose();
 console.log("H3 media frontend checks passed");

@@ -10,9 +10,16 @@ The currently registered nodes are listed below.
 Location: `mAI / Input`. Registered as `MAIH3MediaReferences`.
 An ordered media holder for ComfyUI's native **MiniMax H3 Reference to Video**.
 Drop several pictures, audio files or videos into its preview panel, use **Add
-files**, or **Choose folder** (includes subfolders). Folder contents are sorted
-by relative filename; unsupported files are skipped. New files append to the
-list. Images have thumbnails; audio and video have playback controls. Drag a
+files**, or **Choose folder** (includes subfolders). Unsupported files are skipped.
+The default sort is **Name (A–Z)** for all imports: case-insensitive natural
+filename order (`image2` before `image10`), including files from subfolders.
+The **Sort** dropdown also offers **Name (Z–A)**, **Type, then name (A–Z)**
+(images, videos, audio), and **Manual order**. Choosing a sort immediately updates
+the whole list and numbered output assignments; later imports use that sort too.
+Dragging a card or using its arrows switches to Manual order, where new files
+append. The chosen mode and current order persist in the workflow; loading an
+existing workflow preserves its saved order until a sort is chosen or files are
+imported. Images have thumbnails; audio and video have playback controls. Drag a
 card's grip to reorder, use its arrow buttons, or remove it with ×. Reordering
 changes assignment to numbered output slots within each media type. Cards show
 their exact output name; existing cables stay connected to those numbered slots.
@@ -55,7 +62,9 @@ Test in ComfyUI: restart and refresh the browser, add **mAI H3 media references*
 drop two images plus audio and a video, then drag the second image above the
 first. Connect matching named outputs to **MiniMax H3 Reference to Video** and
 queue your existing H3 workflow. Verify that image order swaps, the soundtrack
-stays paired with its video, and save/reload preserves previews and order.
+stays paired with its video, and save/reload preserves previews and order. Import
+`image10.png`, `image2.png`, and `image1.png` in a new node: they should appear as
+1, 2, 10. Try each Sort option, then drag a card and confirm Manual order is selected.
 This node targets the native H3 tensor sockets, not `mAI_H3_Sol`'s custom socket.
 The panel works on plain HTTP LAN addresses as well as localhost and HTTPS;
 its drag identifiers do not require browser secure-context APIs.

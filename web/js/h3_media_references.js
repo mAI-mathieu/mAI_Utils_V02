@@ -5,6 +5,28 @@ const BASE = "/mai/h3/references";
 const DRAG_TYPE = "application/x-mai-h3-reference";
 let settingsPromise;
 let panelSequence = 0;
+const SORT_OPTIONS = {
+    name_asc: "Name (A–Z)",
+    name_desc: "Name (Z–A)",
+    type: "Type, then name (A–Z)",
+    manual: "Manual order",
+};
+const nameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
+export function sortReferenceItems(items, mode = "name_asc") {
+    if (!Object.hasOwn(SORT_OPTIONS, mode)) throw new Error(`Unknown reference sort order: ${mode}`);
+    const sorted = [...items];
+    if (mode === "manual") return sorted;
+    const typeOrder = { image: 0, video: 1, audio: 2 };
+    return sorted.sort((a, b) => {
+        if (mode === "type") {
+            const byType = typeOrder[a.kind] - typeOrder[b.kind];
+            if (byType) return byType;
+        }
+        const byName = nameCollator.compare(a.name, b.name);
+        return mode === "name_desc" ? -byName : byName;
+    });
+}
 
 function element(tag, text, style = "") {
     const el = document.createElement(tag);
@@ -64,11 +86,21 @@ export class H3ReferencePanel {
         toolbar.append(this.button("Add files", () => this.files.click()),
             this.button("Choose folder", () => this.folder.click()),
             this.button("Clear", () => { this.items = []; this.save(); this.render(); }));
+        const sortRow = element("label", "Sort", "display:flex;align-items:center;gap:8px;flex-shrink:0;");
+        this.sortSelect = element("select", "", "flex:1;min-width:0;background:#2a2e38;color:inherit;border:1px solid #5b6270;border-radius:4px;padding:4px;");
+        this.sortSelect.setAttribute("aria-label", "Reference sort order");
+        for (const [value, label] of Object.entries(SORT_OPTIONS)) {
+            const option = element("option", label);
+            option.value = value;
+            this.sortSelect.append(option);
+        }
+        this.sortSelect.addEventListener("change", () => this.setSortMode(this.sortSelect.value));
+        sortRow.append(this.sortSelect);
         this.count = element("div", "", "font-weight:600;flex-shrink:0;");
         this.list = element("div", "", "flex:1;min-height:140px;overflow:auto;display:flex;flex-direction:column;gap:8px;border:1px dashed #5b6270;border-radius:6px;padding:6px;");
         this.message = element("div", "Drop media here. Drag the grip to change output order.", "line-height:1.4;flex-shrink:0;overflow-wrap:anywhere;");
         this.message.setAttribute("role", "status");
-        this.root.append(toolbar, this.count, this.list, this.message, this.files, this.folder);
+        this.root.append(toolbar, sortRow, this.count, this.list, this.message, this.files, this.folder);
         this.root.append(element("div", "Wire matching ref_* sockets to MiniMax H3 Reference to Video. Order is numbered separately for images, videos and audio.", "font-size:11px;line-height:1.4;color:#b9c4d8;flex-shrink:0;"));
         for (const name of ["pointerdown", "mousedown", "keydown", "wheel"]) {
             this.root.addEventListener(name, (event) => event.stopPropagation());
@@ -113,8 +145,7 @@ export class H3ReferencePanel {
         input.hidden = true;
         if (folder) { input.webkitdirectory = true; input.setAttribute("webkitdirectory", ""); }
         input.addEventListener("change", () => {
-            let files = Array.from(input.files ?? []);
-            if (folder) files.sort((a, b) => a.webkitRelativePath.localeCompare(b.webkitRelativePath, undefined, { numeric: true }));
+            const files = Array.from(input.files ?? []);
             input.value = "";
             this.ingest(Promise.resolve(files));
         });
@@ -129,11 +160,16 @@ export class H3ReferencePanel {
 
     save() {
         this.widget.value = JSON.stringify(this.items);
+        this.node.properties ??= {};
+        this.node.properties.maiH3ReferenceSort = this.sortMode;
         this.node.graph?.change?.();
         this.node.setDirtyCanvas(true, true);
     }
 
     restore() {
+        const mode = this.node.properties?.maiH3ReferenceSort;
+        this.sortMode = Object.hasOwn(SORT_OPTIONS, mode) ? mode : "name_asc";
+        this.sortSelect.value = this.sortMode;
         try {
             const items = JSON.parse(this.widget.value || "[]");
             if (!Array.isArray(items) || items.some((item) => !item || !/^[a-f0-9]{64}\.[a-z0-9]+$/.test(item.filename)
@@ -230,23 +266,35 @@ export class H3ReferencePanel {
     move(from, to) {
         if (this.busy || to < 0 || to >= this.items.length || from === to) return;
         this.items.splice(to, 0, this.items.splice(from, 1)[0]);
+        this.sortMode = "manual";
+        this.sortSelect.value = this.sortMode;
         this.save(); this.render();
         this.status("Output order updated and saved in the workflow.");
+    }
+
+    setSortMode(mode) {
+        if (this.busy) { this.sortSelect.value = this.sortMode; return; }
+        this.items = sortReferenceItems(this.items, mode);
+        this.sortMode = mode;
+        this.sortSelect.value = mode;
+        this.save(); this.render();
+        this.status(mode === "manual" ? "Manual order selected. Drag the grip to reorder." : `Sorted by ${SORT_OPTIONS[mode]}. Output order saved.`);
     }
 
     async ingest(filesPromise) {
         if (this.busy || this.disposed) return;
         this.busy = true;
+        this.sortSelect.disabled = true;
         for (const button of this.buttons) button.disabled = true;
         let added = 0;
         try {
             const files = await filesPromise;
             const config = await settings();
-            const candidates = files.map((file) => {
+            const candidates = sortReferenceItems(files.map((file) => {
                 const suffix = `.${file.name.split(".").pop().toLowerCase()}`;
                 const kind = Object.keys(config.extensions).find((key) => config.extensions[key].includes(suffix));
-                return { file, kind };
-            }).filter((item) => item.kind);
+                return { file, kind, name: file.name };
+            }).filter((item) => item.kind), this.sortMode);
             const skipped = files.length - candidates.length;
             if (!candidates.length) throw new Error("No supported media found. Add PNG/JPEG/WebP/BMP, audio, or video files.");
             const counts = { image: 0, audio: 0, video: 0, total: 0 };
@@ -269,7 +317,7 @@ export class H3ReferencePanel {
                     throw new Error(`${file.name}: ${message || `upload failed (${response.status})`}`);
                 }
                 if (this.disposed) return;
-                this.items.push(await response.json());
+                this.items = sortReferenceItems([...this.items, await response.json()], this.sortMode);
                 added++;
                 this.save();
             }
@@ -279,6 +327,7 @@ export class H3ReferencePanel {
         } finally {
             this.busy = false;
             if (!this.disposed) {
+                this.sortSelect.disabled = false;
                 for (const button of this.buttons.slice(0, 3)) button.disabled = false;
                 this.render();
             }
