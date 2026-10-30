@@ -56,11 +56,12 @@ def recover_matching_detail(original, edited, mask):
 
 @torch.no_grad()
 def blend_edit_preserving_details(original, edited, masks, levels):
-    """Use a content-aware hard selection for detail; feather only broad color.
+    """Feather subtle texture differences; hard-select strong displaced detail.
 
     This is a two-band decomposition: all detail above an automatically chosen
-    coarse scale uses one image's pixels, while the low-frequency color layer
-    follows the soft mask. Exact black/white endpoints stay native source/edit.
+    coarse scale uses a content-aware selection where disagreement is strong.
+    Low-contrast texture and the broad color layer follow the soft mask, avoiding
+    a visible cut through walls or grain. Black/white endpoints stay native.
     Inputs are already validated and batch-matched by the node utility.
     """
     output = original.clone()
@@ -74,12 +75,25 @@ def blend_edit_preserving_details(original, edited, masks, levels):
                 continue
             first, second = original[index].to(dtype), edited[index].to(dtype)
             alpha = _content_aware_alpha(first, second, mask)
+            difference = second[..., :3] - first[..., :3]
+            low_difference = blur_image(difference[None], sigma)[0]
+            detail_difference = difference - low_difference
+            # A hard cut through even a small residual creates a contour on a
+            # flat background. Reserve hard selection for substantial detail
+            # disagreement, where feathering could produce double object edges.
+            # Smooth the evidence so individual grain pixels cannot switch the
+            # blending rule. Max RGB also catches isoluminant colored edges.
+            # Measure at a fine scale: coarse blur spill from a nearby changed
+            # object must not turn a matching background into a sharp seam.
+            fine_difference = difference - blur_image(difference[None], 1)[0]
+            evidence = fine_difference.abs().amax(-1, keepdim=True)
+            evidence = blur_image(evidence[None], 1)[0, ..., 0]
+            sharpness = ((evidence - 0.006) / 0.012).clamp(0, 1)
+            sharpness = sharpness.square() * (3 - 2 * sharpness)
+            detail_alpha = torch.lerp(mask, alpha, sharpness)
             selected = torch.where(alpha[..., None] == 1, second, first)
-            first_low = blur_image(first[None, ..., :3], sigma)[0]
-            second_low = blur_image(second[None, ..., :3], sigma)[0]
-            # Preserve the hard-selected fine/medium detail. Only the broad
-            # difference between the two color layers gets a soft transition.
-            selected[..., :3] += (mask - alpha)[..., None] * (second_low - first_low)
+            selected[..., :3] = (first[..., :3] + mask[..., None] * low_difference
+                                 + detail_alpha[..., None] * detail_difference)
             selected[..., :3] = selected[..., :3].clamp(0, 1)
             selected = selected.to(output.dtype)
             selected = torch.where(original[index] == edited[index], original[index], selected)

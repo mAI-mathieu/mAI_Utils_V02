@@ -202,7 +202,12 @@ def detect_image_edits(original_rgb, edited_rgb, allowed_mask):
     region_size = math.sqrt(float(np.sum(areas.astype(float) ** 2) / areas.sum()))
     boundary = ndimage.binary_dilation(regions) & ~regions
     disagreement = float(np.median(color[0].numpy()[boundary])) if boundary.any() else 0
-    feather = float(np.clip(0.5 + 0.008 * region_size + 4 * disagreement, 0.75, 4))
+    # A few analysis pixels make brightness/texture drift trace the region's
+    # outline at native resolution. Give broad color disagreement enough room
+    # to fade, without eroding the solid edit or changing the analysis regions.
+    feather_limit = max(0.75, min(16, 0.08 * min(size)))
+    feather = float(np.clip(2 + 0.02 * region_size + 128 * disagreement,
+                            min(3, feather_limit), feather_limit))
     expansion = float(np.clip(0.5 + 0.015 * region_size, 0.5, 4))
     # Distance transforms need an explicit outside for a completely full mask.
     if regions.all():

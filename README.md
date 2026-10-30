@@ -246,9 +246,12 @@ that cannot establish correspondence. It chooses one of three strategies:
 
 * Localized edits: estimate background drift from whole-image and local tile
   statistics, join weaker changes to strong edit regions, and reject tiny
-  isolated detections. Detected regions stay solid; a narrower transition lies
-  outside them. A content-aware seam chooses fine/medium detail from one image;
-  only a coarse color layer is softly blended, reducing mixed or softened edges.
+  isolated detections. Detected regions stay solid; an outer transition widens
+  with background color disagreement and region size, capped for small images.
+  Subtle texture differences fade smoothly to avoid visible contours on walls
+  and other quiet backgrounds. Strong mismatched fine detail uses a content-aware
+  seam to keep moved edges sharp; broad color is softly blended. Fine-scale
+  evidence reduces background halos from nearby object changes.
 * Widespread color/lighting edits with matching structure: keep the edited image
   as the base and cautiously recover compatible source detail.
 * Poor correspondence or major composition changes: keep the edited image
@@ -318,7 +321,7 @@ Manual settings and defaults:
 Black output-mask pixels preserve the original exactly. In Manual, white takes
 the edit exactly and only gray receives blending/seam corrections. Auto white
 selects the edit with any accepted detail recovery; gray is the transition band.
-Content-aware seams select source/edit detail inside that band, so gray does not
+Content-aware seams can select source/edit detail inside that band, so gray does not
 describe final per-pixel opacity. A full white Auto mask may indicate a global
 edit or a conservative pass-through. Input images and masks are never modified.
 
@@ -347,8 +350,9 @@ that meaningful edit regions survive while stable areas retain source detail.
 Try a localized edit, recoloring, relighting and a replacement scene without
 changing any settings. Major reframing should retain the edited composition;
 relighting should keep the new lighting. Inspect changed features at 100% for
-sharpness. Test an optional edit mask
-and verify black areas stay exactly original. Switch to Manual and back, then
+sharpness and inspect smooth walls around edited subjects for outlines or halos.
+Small texture differences can soften within the transition band. Test an optional
+edit mask and verify black areas stay exactly original. Switch to Manual and back, then
 save/reload to verify the mode and tuning values persist. Automated tests:
 `python -m pytest --confcutdir=tests tests/test_image_preserve_source.py tests/test_image_edit_detection.py tests/test_image_edit_blend.py tests/test_image_preserve_source_fallback.py`.
 For CPU-only verification, run ComfyUI with `--cpu` and queue an aligned pair in

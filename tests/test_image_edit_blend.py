@@ -31,6 +31,24 @@ def test_transition_keeps_fine_contrast_while_blending_broad_color():
     assert abs(result[:, 12:-12, 12:-12].mean() - (source + edited)[:, 12:-12, 12:-12].mean() / 2) < 0.01
 
 
+def test_low_contrast_wall_texture_does_not_leave_a_hard_seam():
+    # The two walls differ slightly in decoder texture and brightness. Neither
+    # contains a displaced object edge that would justify a hard detail cut.
+    yy = torch.arange(96)[:, None]
+    source = (0.45 + 0.01 * torch.sin(yy * math.pi / 6))
+    source = source[None, ..., None].expand(1, 96, 96, 3).clone()
+    edited = 0.92 - source
+    mask = ((torch.arange(96) - 24) / 48).clamp(0, 1)
+    mask = mask[None, None].expand(*source.shape[:3])
+    result = blend_edit_preserving_details(source, edited, mask, levels=4)
+    # Both input walls are constant horizontally. A sudden horizontal output
+    # step is therefore introduced by the compositor, rather than real detail.
+    steps = result[:, 12:-12, 1:] - result[:, 12:-12, :-1]
+    assert steps.abs().max() < 0.002
+    assert torch.equal(result[mask == 0], source[mask == 0])
+    assert torch.equal(result[mask == 1], edited[mask == 1])
+
+
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32, torch.float64])
 def test_sharp_blend_keeps_exact_native_endpoints_alpha_and_inputs(dtype):
     source = torch.rand(1, 25, 31, 4).to(dtype).transpose(1, 2)
@@ -161,3 +179,20 @@ def test_native_detail_operations_match_cpu_on_cuda_under_autocast():
             actual = recover_matching_detail(source.to(device), edited.to(device), mask.to(device))
         assert actual.device == device and actual.dtype == source.dtype
         torch.testing.assert_close(actual.cpu(), expected, atol=2e-4, rtol=2e-4)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")
+def test_adaptive_seam_blending_matches_cpu_on_cuda_under_autocast():
+    source = textured_image()
+    edited = source.roll(2, dims=2) + 0.1
+    mask = ((torch.arange(96) - 24) / 48).clamp(0, 1)[None, None]
+    mask = mask.expand(*source.shape[:3])
+    expected = blend_edit_preserving_details(source, edited, mask, 4)
+    for index in range(torch.cuda.device_count()):
+        device = torch.device("cuda", index)
+        with torch.autocast("cuda", dtype=torch.float16):
+            actual = blend_edit_preserving_details(source.to(device), edited.to(device), mask.to(device), 4)
+        assert actual.device == device and actual.dtype == source.dtype
+        torch.testing.assert_close(actual.cpu(), expected, atol=2e-4, rtol=2e-4)
+        assert torch.equal(actual.cpu()[mask == 0], source[mask == 0])
+        assert torch.equal(actual.cpu()[mask == 1], edited[mask == 1])

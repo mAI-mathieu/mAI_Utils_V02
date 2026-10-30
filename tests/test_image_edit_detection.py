@@ -104,6 +104,20 @@ def test_thresholds_adapt_to_noise_and_feather_to_resolution():
     assert large.multiband_levels >= low.multiband_levels
 
 
+@pytest.mark.parametrize("size", [96, 192])
+def test_background_drift_fades_without_tracing_the_local_edit_boundary(size):
+    original, edited = pair(size, drift=0.025)
+    image, mask = preserve_source_image(original, edited, mode="auto")
+    # Outside the actual square edit, both inputs are flat. A near-one-pixel
+    # switch of the 0.025 drift used to draw an outline around that square.
+    background = image[0, size // 2, 2 * size // 3:, 0]
+    assert background.diff().abs().max() < 0.008
+    assert background.min() >= original[0, 0, 0, 0] - 1e-6
+    assert background.max() <= edited[0, 0, 0, 0] + 1e-6
+    assert mask[0, size // 2, size // 2] == 1
+    assert torch.equal(image[:, :size // 8], original[:, :size // 8])
+
+
 def test_hysteresis_groups_weak_changes_fills_holes_and_rejects_disconnected_noise():
     ndimage = pytest.importorskip("scipy.ndimage")
     score = np.zeros((64, 64))
