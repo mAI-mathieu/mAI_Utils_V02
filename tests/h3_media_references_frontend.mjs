@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { webcrypto } from "node:crypto";
-
-globalThis.crypto ??= webcrypto;
+// Plain HTTP LAN pages do not expose secure-context APIs such as randomUUID.
+// Node creation must work there just as it does on localhost and HTTPS.
+Object.defineProperty(globalThis, "crypto", { value: undefined, configurable: true });
 class Element {
     constructor(tag) { this.tag = tag; this.style = {}; this.children = []; this.events = new Map(); }
     append(...children) { this.children.push(...children); }
@@ -68,6 +68,7 @@ panel.reorder(`${panel.token}:0`, 4);
 assert.equal(panel.items.at(-1).name, "file 1");
 const reloaded = new H3ReferencePanel(node, widget);
 assert.deepEqual(reloaded.items, panel.items);
+assert.notEqual(reloaded.token, panel.token, "Separate panels must reject each other's drags without requiring browser crypto");
 assert.ok(dirty >= 3);
 // Remove only detaches the selected reference, preserving all others.
 panel.list.children[0].children[0].children.at(-1).events.get("click")();

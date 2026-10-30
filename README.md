@@ -57,6 +57,8 @@ first. Connect matching named outputs to **MiniMax H3 Reference to Video** and
 queue your existing H3 workflow. Verify that image order swaps, the soundtrack
 stays paired with its video, and save/reload preserves previews and order.
 This node targets the native H3 tensor sockets, not `mAI_H3_Sol`'s custom socket.
+The panel works on plain HTTP LAN addresses as well as localhost and HTTPS;
+its drag identifiers do not require browser secure-context APIs.
 All code and uploaded files stay inside this pack; ComfyUI core is unchanged.
 Automated checks: run `python -m pytest tests/test_h3_reference_*.py -q` with a
 shell that expands wildcards, or run `python -m pytest -k h3_reference -q`.

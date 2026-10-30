@@ -4,6 +4,7 @@ import { api } from "../../../scripts/api.js";
 const BASE = "/mai/h3/references";
 const DRAG_TYPE = "application/x-mai-h3-reference";
 let settingsPromise;
+let panelSequence = 0;
 
 function element(tag, text, style = "") {
     const el = document.createElement(tag);
@@ -51,7 +52,9 @@ export class H3ReferencePanel {
         this.node = node;
         this.widget = widget;
         this.items = [];
-        this.token = crypto.randomUUID();
+        // This only distinguishes live panels during drag-and-drop. A local
+        // counter also works on HTTP LAN pages, where randomUUID is unavailable.
+        this.token = `h3-panel-${++panelSequence}`;
         this.abort = new AbortController();
         this.root = element("div", "", "display:flex;flex-direction:column;gap:8px;width:100%;height:100%;min-height:330px;padding:10px;box-sizing:border-box;background:#181a20;color:#eef0f5;border:1px solid #454956;border-radius:8px;font:12px sans-serif;overflow:hidden;");
         const toolbar = element("div", "", "display:flex;gap:6px;flex-wrap:wrap;flex-shrink:0;");
