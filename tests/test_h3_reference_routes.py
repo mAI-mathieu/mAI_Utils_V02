@@ -46,6 +46,14 @@ def test_upload_deduplicates_and_preserves_name(tmp_path, monkeypatch):
     assert (tmp_path / expected).read_bytes() == payload
 
 
+def test_identical_media_preserves_each_exact_original_name(tmp_path, monkeypatch):
+    monkeypatch.setattr(routes, "MEDIA_DIRECTORY", tmp_path)
+    names = ["  Shot 0002 - ÉTÉ (Final).PNG", "Shot 0010 Original.PNG"]
+    responses = [json.loads(run(routes.upload_reference(Request(Part(name, [b"same media"])))).body) for name in names]
+    assert [item["name"] for item in responses] == names
+    assert responses[0]["filename"] == responses[1]["filename"]
+
+
 @pytest.mark.parametrize("name,chunks", [("evil.html", [b"bad"]), ("empty.mp4", []), ("x" * 513 + ".png", [b"bad"])])
 def test_invalid_uploads_leave_no_partial_file(tmp_path, monkeypatch, name, chunks):
     monkeypatch.setattr(routes, "MEDIA_DIRECTORY", tmp_path)

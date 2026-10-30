@@ -13,6 +13,10 @@ Drop several pictures, audio files or videos into its preview panel, use **Add
 files**, or **Choose folder** (includes subfolders). Unsupported files are skipped.
 The default sort is **Name (A–Z)** for all imports: case-insensitive natural
 filename order (`image2` before `image10`), including files from subfolders.
+References keep their exact original filenames, including capitalization,
+spaces, accents, leading zeros and extensions, in the cards and saved manifest.
+Sorting uses those original names; exact spelling breaks natural-sort ties
+such as `image02.png` and `image2.png`.
 The **Sort** dropdown also offers **Name (Z–A)**, **Type, then name (A–Z)**
 (images, videos, audio), and **Manual order**. Choosing a sort immediately updates
 the whole list and numbered output assignments; later imports use that sort too.

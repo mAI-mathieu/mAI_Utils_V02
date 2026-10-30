@@ -28,6 +28,7 @@ const item = (number, kind = "image") => ({ filename: number.toString(16).padSta
 let extension;
 let uploads = [];
 let failAt = Infinity;
+let uploadResponseName = (name) => name;
 globalThis.testApp = { registerExtension(value) { extension = value; } };
 globalThis.testApi = {
     apiURL: (url) => `/comfy${url}`,
@@ -38,7 +39,7 @@ globalThis.testApi = {
         if (uploads.length === failAt) return { ok: false, status: 400, text: async () => JSON.stringify({ error: "test upload failure" }) };
         const name = uploads.at(-1).name;
         const kind = Object.keys(config.extensions).find((key) => config.extensions[key].some((suffix) => name.toLowerCase().endsWith(suffix)));
-        return { ok: true, json: async () => ({ ...item(uploads.length, kind), name }) };
+        return { ok: true, json: async () => ({ ...item(uploads.length, kind), name: uploadResponseName(name) }) };
     },
 };
 const source = (await readFile(new URL("../web/js/h3_media_references.js", import.meta.url), "utf8"))
@@ -57,6 +58,10 @@ assert.deepEqual(sortReferenceItems(unsorted, "manual"), unsorted);
 assert.notEqual(sortReferenceItems(unsorted, "manual"), unsorted);
 assert.equal(unsorted[0].name, "image10.png", "Sorting must not mutate its input");
 assert.throws(() => sortReferenceItems(unsorted, "unknown"), /Unknown reference sort/);
+const exactNames = ["image2.png", "image02.png", "Image02.png", "image002.png"];
+const exactSorted = ["Image02.png", "image002.png", "image02.png", "image2.png"];
+assert.deepEqual(sortReferenceItems(exactNames.map((name) => ({ name, kind: "image" }))).map((entry) => entry.name), exactSorted);
+assert.deepEqual(sortReferenceItems(exactNames.map((name) => ({ name, kind: "image" })), "name_desc").map((entry) => entry.name), [...exactSorted].reverse());
 const settle = async () => { for (let i = 0; i < 25; i++) await Promise.resolve(); };
 let dirty = 0;
 const node = { graph: { change() { dirty++; } }, setDirtyCanvas() {} };
@@ -187,4 +192,23 @@ await pendingUpload;
 assert.equal(sortingPanel.sortSelect.disabled, false);
 sortingPanel.dispose();
 sortedReload.dispose();
+// Preserve File.name exactly even if the server responds with a different name.
+// Two names may share the same storage ID without losing their distinct labels.
+const originalNode = { properties: {}, graph: { change() {} }, setDirtyCanvas() {} };
+const originalWidget = { value: "[]" };
+const originalPanel = new H3ReferencePanel(originalNode, originalWidget);
+const originals = ["  Shot 0002 - ÉTÉ (Final).PNG", "Shot 0010 original.wav", "Shot 0001.MP4"];
+uploadResponseName = () => "server-generated-alias.png";
+await originalPanel.ingest(Promise.resolve(originals.map((name) => new File(["reference"], name))));
+assert.equal(originalPanel.items.length, 3);
+assert.deepEqual(new Set(originalPanel.items.map((entry) => entry.name)), new Set(originals));
+assert.deepEqual(new Set(JSON.parse(originalWidget.value).map((entry) => entry.name)), new Set(originals));
+assert.ok(originalPanel.list.children.some((card) => card.children[0].children[1].textContent.endsWith(originals[0])));
+originalPanel.setSortMode("name_desc");
+assert.deepEqual(new Set(originalPanel.items.map((entry) => entry.name)), new Set(originals));
+const originalReload = new H3ReferencePanel(originalNode, originalWidget);
+assert.deepEqual(originalReload.items, originalPanel.items);
+originalPanel.dispose();
+originalReload.dispose();
+uploadResponseName = (name) => name;
 console.log("H3 media frontend checks passed");

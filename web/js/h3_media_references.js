@@ -23,7 +23,10 @@ export function sortReferenceItems(items, mode = "name_asc") {
             const byType = typeOrder[a.kind] - typeOrder[b.kind];
             if (byType) return byType;
         }
-        const byName = nameCollator.compare(a.name, b.name);
+        // Natural comparison can consider "02" and "2" (or case variants)
+        // equal. Use the exact original spelling to break those ties.
+        const exactNameOrder = a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+        const byName = nameCollator.compare(a.name, b.name) || exactNameOrder;
         return mode === "name_desc" ? -byName : byName;
     });
 }
@@ -317,7 +320,11 @@ export class H3ReferencePanel {
                     throw new Error(`${file.name}: ${message || `upload failed (${response.status})`}`);
                 }
                 if (this.disposed) return;
-                this.items = sortReferenceItems([...this.items, await response.json()], this.sortMode);
+                const uploaded = await response.json();
+                // File.name is the authoritative original name. The upload
+                // response's filename identifies storage, not the sorting name.
+                const reference = { ...uploaded, name: file.name };
+                this.items = sortReferenceItems([...this.items, reference], this.sortMode);
                 added++;
                 this.save();
             }
