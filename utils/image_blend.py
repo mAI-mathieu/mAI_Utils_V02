@@ -56,11 +56,9 @@ def _apply_blend_mode(bottom, top, mode):
     raise ValueError(f"Unknown blend mode: {mode}")
 
 
-def _blend_frequency_frame(top, bottom, fraction, mode, detail_scale):
-    color_channels = min(bottom.shape[-1], 3)
-    base = bottom[..., :color_channels]
-    difference = top[..., :color_channels] - base
-    if mode == "high_frequency" and color_channels == 3:
+def _blend_frequency_frame(top, base, fraction, mode, detail_scale):
+    difference = top - base
+    if mode == "high_frequency" and base.shape[-1] == 3:
         luma_weights = difference.new_tensor([0.2126, 0.7152, 0.0722])
         difference = (difference * luma_weights).sum(dim=-1, keepdim=True)
     low_difference = blur_image(difference, strength=detail_scale)

@@ -1,7 +1,9 @@
 import pytest
 import torch
 
+from nodes import image_blend as blend_node
 from nodes.image_blend import MAIImageBlend
+from utils import image_blend as blend_utils
 from utils.image_blend import BLEND_MODES, blend_image_batches, parse_blend_percentages
 
 
@@ -133,6 +135,52 @@ def test_frequency_modes_preserve_bottom_alpha_device_and_frame_order(mode, devi
     assert not torch.equal(result[:1, ..., :3], result[1:, ..., :3])
     assert result.is_contiguous()
     assert torch.equal(blend_image_batches(top, bottom, 0.0, mode), bottom.expand(2, -1, -1, -1))
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")
+def test_cuda_processes_cpu_video_frames_without_moving_the_output_batch(monkeypatch):
+    device = torch.device("cuda", torch.cuda.current_device())
+    monkeypatch.setattr(blend_node, "resolve_post_effects_device", lambda *_: device)
+    blur = blend_utils.blur_image
+    processed = []
+
+    def record_device(image, strength):
+        processed.append((image.device, image.shape[0]))
+        return blur(image, strength)
+
+    monkeypatch.setattr(blend_utils, "blur_image", record_device)
+    top = _images(0.3, 0.7)
+    bottom = _images(0.4)
+    frequency, = MAIImageBlend().run(top, bottom, blend_mode="low_frequency")
+    multiply, = MAIImageBlend().run(top, bottom, blend_mode="multiply")
+
+    assert processed == [(device, 1), (device, 1)]
+    torch.testing.assert_close(frequency, _images(0.35, 0.55))
+    torch.testing.assert_close(multiply, _images(0.26, 0.34))
+
+
+def test_cuda_memory_failure_retries_on_cpu(monkeypatch):
+    monkeypatch.setattr(blend_node, "resolve_post_effects_device", lambda *_: torch.device("cuda:0"))
+    attempted = []
+
+    def fail_first(*args, compute_device, output_device, **kwargs):
+        attempted.append(torch.device(compute_device).type)
+        if attempted[-1] == "cuda":
+            raise torch.cuda.OutOfMemoryError("CUDA out of memory")
+        return blend_image_batches(*args, compute_device=compute_device, output_device=output_device, **kwargs)
+
+    monkeypatch.setattr(blend_node, "blend_image_batches", fail_first)
+    with pytest.warns(RuntimeWarning, match="retrying on CPU"):
+        result, = MAIImageBlend().run(_images(0.8), _images(0.2), blend_mode="low_frequency")
+
+    assert attempted == ["cuda", "cpu"]
+    torch.testing.assert_close(result, _images(0.5))
+
+
+def test_auto_uses_cpu_when_cuda_is_unavailable(monkeypatch):
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    result, = MAIImageBlend().run(_images(0.8), _images(0.2), blend_mode="low_frequency")
+    torch.testing.assert_close(result, _images(0.5))
 
 
 @pytest.mark.parametrize("scale", [0, 32.1, float("nan"), "2", True])
