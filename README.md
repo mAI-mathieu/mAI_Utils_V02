@@ -2269,14 +2269,21 @@ They default to `0.0` and `1.0`. Both bounds are inclusive and must be finite.
 The minimum must be less than or equal to the maximum.
 
 Connect `int` (INT) for a uniformly sampled whole number in the range, or
-`float` (FLOAT) for a decimal-capable value. The two sockets draw independently
-each time the workflow is queued, so values can repeat. For a range with no
-whole number, such as `0.1` through `0.9`, only the `float` socket can be used.
+`float` (FLOAT) for a decimal-capable value. For a range with no whole number,
+such as `0.1` through `0.9`, only the `float` socket can be used.
+
+The optional `seed` input defaults to `0` in the editor. Choose **Fixed** in
+ComfyUI's after-generate control to repeat both outputs with the same range and
+seed. Edit the seed manually or choose **Randomize**, **Increment**, or
+**Decrement** to change it automatically. Different seeds can give the same
+value, especially in small ranges. Older API prompts that omit `seed` continue
+to draw fresh values on each queue.
 
 To test in ComfyUI, restart, add the node and connect either output to a matching
-input. Set both bounds to `5` to confirm it returns `5` on the INT socket and
-`5.0` on the FLOAT socket. Run `python -m pytest tests/test_random_number.py` for
-the automated checks.
+input. Set the range to `-100` through `100`, choose **Fixed**, and queue twice
+with seed `42`. Change the seed to `43` and queue again. The first two runs should
+match, and the third should give different values. Run
+`python -m pytest tests/test_random_number.py` for the automated checks.
 
 ## mAI text sequence randomizer
 
