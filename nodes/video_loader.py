@@ -1,9 +1,9 @@
 import os
 
 try:
-    from ..utils.video_loader import get_frame_batch_info
+    from ..utils.video_loader import get_frame_batch_info, load_video_components
 except ImportError:
-    from utils.video_loader import get_frame_batch_info
+    from utils.video_loader import get_frame_batch_info, load_video_components
 
 
 class MAIVideoLoader:
@@ -48,7 +48,7 @@ class MAIVideoLoader:
         from comfy_api.latest import InputImpl
 
         video_path = folder_paths.get_annotated_filepath(video)
-        components = InputImpl.VideoFromFile(video_path).get_components()
+        components = load_video_components(InputImpl.VideoFromFile, video_path, frame_limit)
         frames = components.images
         frame_count, width, height = get_frame_batch_info(frames)
         if 0 < frame_limit < frame_count:

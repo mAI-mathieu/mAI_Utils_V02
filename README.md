@@ -890,8 +890,10 @@ a direct torch-to-NVENC CUDA surface connection when using NVENC. No PNG/PIL/Ope
 per-frame Python conversion loop is used. NumPy is only a zero-copy CPU byte
 view of torch data. `imageio-ffmpeg` provides a bundled FFmpeg fallback when installed.
 
-`chunk_size=0` chooses at most 32 frames and approximately 64 MiB of packed
-NV12 pixels per chunk (at least one frame). Positive values specify frames per chunk.
+`chunk_size=0` chooses 1–32 frames using a 256 MiB estimate for conversion
+buffers, frame selection and packed NV12. Large chunks and single frames are
+converted in even-height bands targeting 128 MiB of conversion scratch.
+Positive values specify frames per chunk.
 Input is not modified, and frame order is preserved. Odd width/height gain one
 black column/row at the right/bottom for even 4:2:0 dimensions; no resizing occurs.
 One-channel input expands to RGB; RGBA alpha is discarded. Outputs are SDR 8-bit
@@ -1075,10 +1077,10 @@ in FP32 (FP64 for FP64 input); native antialiased reduced precision and CPU
 linear/cubic/area use FP32 internally when needed. Matching-size inputs bypass
 filtering and copying, while honoring explicit device/dtype changes.
 
-`chunk_size=0` processes native methods as a whole batch; custom methods select
-batch chunks from a conservative 512 MiB working-memory estimate. Positive
-values specify the batch chunk size. Tables are built once and reused by every
-chunk. Only chunk and kernel-tap loops are used, never per-frame resizing.
+`chunk_size=0` chooses a batch chunk size from a 512 MiB working-memory estimate
+for native and custom methods. Positive values specify frames per chunk.
+Custom filters also split each sampling pass into tiles targeting 64 MiB per
+temporary sample. Tables are built once and reused by every chunk.
 The node uses no PIL/OpenCV/NumPy path and adds no dependencies. GPU execution
 releases unused CUDA cache, requests ComfyUI model offloading when the estimated
 output/scratch budget exceeds free VRAM, and releases unused cache after each
@@ -1716,8 +1718,12 @@ Default behavior:
 
 Known limitations:
 
-* The limit is applied after decoding. Long or high-resolution videos can still
-  require substantial RAM. The limit does not trim audio.
+* With ComfyUI's streaming decoder, `frame_limit` stops decoding video once the
+  requested frames are ready. The full audio track is still decoded. Older
+  ComfyUI versions without the streaming hook apply the limit after decoding.
+* The retained frames are returned at source resolution as one image batch. A
+  batch of 100 frames at 3840 × 2160 uses about 9.3 GiB for the float32 RGB
+  tensor alone.
 * Variable-frame-rate sources report their average frame rate.
 * A video without an audio stream returns no `AUDIO` value. Use **mAI audio
   fallback** with the loader's `frame_count` and `fps` for consumers that require audio.

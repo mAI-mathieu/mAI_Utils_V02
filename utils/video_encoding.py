@@ -35,6 +35,10 @@ PRESETS = tuple(f"p{i}" for i in range(1, 8))
 SOFTWARE_PRESETS = ("ultrafast", "superfast", "veryfast", "medium", "slow", "slower", "veryslow")
 SVT_AV1_PRESETS = (12, 10, 8, 6, 5, 4, 3)
 H264_QUALITY_PRESETS = {"low": 28, "medium": 23, "high": 18}
+NV12_CHUNK_BYTES = 256 * 1024 * 1024
+NV12_SCRATCH_BYTES = 128 * 1024 * 1024
+# Allow for padded FP32 RGB, finite checks, luma/chroma intermediates and pooling.
+NV12_SCRATCH_BYTES_PER_PIXEL = 36
 
 
 class NVENCError(RuntimeError):
@@ -294,9 +298,23 @@ def _write_audio(path, audio_info, duration, check_interrupt):
             _write_all(stream, chunk.numpy())  # Zero-copy CPU byte view, not image processing.
 
 
-def _pack_nv12(frames, width, height):
-    if not torch.isfinite(frames).all():
-        raise ValueError("Frames contain non-finite pixels.")
+def _video_chunk_size(frames, width, height, options):
+    if options.chunk_size:
+        return options.chunk_size
+    # Also allow for source selection or GPU-to-CPU staging during fallback.
+    pixels = width * height
+    working_bytes = pixels * (NV12_SCRATCH_BYTES_PER_PIXEL + frames.shape[3] * frames.element_size())
+    return max(1, min(32, NV12_CHUNK_BYTES // (working_bytes + pixels * 3 // 2)))
+
+
+def _nv12_band_height(batch, width):
+    # Split only on even rows so each chroma sample keeps its 2x2 block.
+    rows = NV12_SCRATCH_BYTES // (batch * width * NV12_SCRATCH_BYTES_PER_PIXEL)
+    return max(2, rows // 2 * 2)
+
+
+def _pack_nv12_band(frames, luma, chroma):
+    height, width = luma.shape[1:]
     rgb = frames[..., :3] if frames.shape[3] != 1 else frames.expand(-1, -1, -1, 3)
     rgb = rgb.to(dtype=torch.float32).clamp(0, 1)
     if (frames.shape[1], frames.shape[2]) != (height, width):
@@ -306,16 +324,32 @@ def _pack_nv12(frames, width, height):
     # across each 2x2 block for centered 4:2:0 sampling. All tensor work stays
     # on the original device; FP32 prevents half/BF16 coefficient error.
     y = rgb[..., 0] * 0.2126 + rgb[..., 1] * 0.7152 + rgb[..., 2] * 0.0722
-    y = (y * 219 + 16).round().clamp_(16, 235).to(torch.uint8)
+    luma.copy_(y.mul_(219).add_(16).round_().clamp_(16, 235))
+    del y
     small = F.avg_pool2d(rgb.permute(0, 3, 1, 2), 2, 2)
     del rgb
     r, g, b = small.unbind(dim=1)
     luminance = r * 0.2126 + g * 0.7152 + b * 0.0722
-    cb = ((b - luminance) * (224 / (2 * (1 - 0.0722))) + 128).round().clamp_(16, 240).to(torch.uint8)
-    cr = ((r - luminance) * (224 / (2 * (1 - 0.2126))) + 128).round().clamp_(16, 240).to(torch.uint8)
+    cb = ((b - luminance) * (224 / (2 * (1 - 0.0722))) + 128).round().clamp_(16, 240)
+    chroma[..., 0::2].copy_(cb)
+    del cb
+    cr = ((r - luminance) * (224 / (2 * (1 - 0.2126))) + 128).round().clamp_(16, 240)
+    chroma[..., 1::2].copy_(cr)
+
+
+def _pack_nv12(frames, width, height):
     packed = torch.empty((len(frames), height * width * 3 // 2), device=frames.device, dtype=torch.uint8)
-    packed[:, :height * width] = y.flatten(1)
-    packed[:, height * width:] = torch.stack((cb, cr), dim=-1).flatten(1)
+    luma = packed[:, :height * width].view(len(frames), height, width)
+    chroma = packed[:, height * width:].view(len(frames), height // 2, width)
+    band_height = _nv12_band_height(len(frames), width)
+    finite = torch.ones((), dtype=torch.bool, device=frames.device)
+    for top in range(0, height, band_height):
+        bottom = min(top + band_height, height)
+        band = frames[:, top:bottom]
+        finite.logical_and_(torch.isfinite(band).all())
+        _pack_nv12_band(band, luma[:, top:bottom], chroma[:, top // 2:bottom // 2])
+    if not finite:
+        raise ValueError("Frames contain non-finite pixels.")
     return packed.to(device="cpu")
 
 
@@ -326,18 +360,22 @@ def encode_video(frames, output_path, options=None, audio=None, metadata=None,
     options = options or VideoEncodeOptions()
     validate_options(options)
     source_count, width, height = get_video_dimensions(frames)
-    validate_audio(audio)
+    audio_info = validate_audio(audio)
     if check_interrupt:
         check_interrupt()
-    chunk_size = options.chunk_size or max(1, min(32, (64 * 1024 * 1024) // (width * height * 3 // 2)))
-    # FP32 RGB, conversion arithmetic, NV12, padding and pingpong selection.
-    conversion_bytes = min(source_count, chunk_size) * width * height * 48
-    if options.codec in NVENC_CODECS:
-        budgets = video_memory_requirements(frames.device, options.gpu_device, conversion_bytes)
-    else:
-        # Software compression needs no external CUDA context or NVENC budget.
-        budgets = {frames.device: conversion_bytes} if frames.device.type == "cuda" else {}
+    count, _ = calculate_video_timing(source_count, options, audio_info)
     for attempt in range(2):
+        chunk_size = min(count, _video_chunk_size(frames, width, height, options))
+        band_rows = min(height, _nv12_band_height(chunk_size, width))
+        packed_bytes = chunk_size * width * height * 3 // 2
+        conversion_bytes = packed_bytes + chunk_size * width * band_rows * NV12_SCRATCH_BYTES_PER_PIXEL
+        if options.pingpong or options.loop_count:
+            conversion_bytes += chunk_size * frames[0].numel() * frames.element_size()
+        if options.codec in NVENC_CODECS:
+            budgets = video_memory_requirements(frames.device, options.gpu_device, conversion_bytes)
+        else:
+            # Software compression needs no external CUDA context or NVENC budget.
+            budgets = {frames.device: conversion_bytes} if frames.device.type == "cuda" else {}
         try:
             with ExitStack() as stack:
                 for device, required in budgets.items():
@@ -425,7 +463,7 @@ def _encode_video(frames, output_path, options=None, audio=None, metadata=None,
     if check_interrupt:
         check_interrupt()
     output.parent.mkdir(parents=True, exist_ok=True)
-    chunk_size = options.chunk_size or max(1, min(32, (64 * 1024 * 1024) // (width * height * 3 // 2)))
+    chunk_size = _video_chunk_size(frames, width, height, options)
     with tempfile.TemporaryDirectory(prefix=".mai_video_", dir=output.parent) as temp:
         temp = Path(temp)
         audio_path = temp / "audio.f32" if audio_info is not None else None

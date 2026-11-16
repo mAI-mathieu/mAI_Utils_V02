@@ -49,7 +49,7 @@ class MAIGPUVideoCombine:
                 "gpu_device": ("INT", {"default": -1, "min": -1, "max": 128,
                                        "tooltip": "FFmpeg NVENC device index; -1 selects an available GPU. Ignored for software codecs."}),
                 "chunk_size": ("INT", {"default": 0, "min": 0, "max": 4096,
-                                       "tooltip": "Frames converted/transferred per chunk. 0 chooses up to 64 MiB of packed pixels."}),
+                                       "tooltip": "Frames converted/transferred per chunk. 0 chooses automatically based on estimated conversion memory."}),
             },
             "optional": {
                 "audio": ("AUDIO",),

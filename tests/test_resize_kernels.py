@@ -424,6 +424,14 @@ def test_center_crop_preserves_dtype_device_and_ignores_precision(device, dtype)
     assert torch.equal(converted, image[:, 1:7, 3:15].cpu())
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")
+def test_center_crop_transfers_only_cropped_pixels():
+    image = torch.rand(1, 64, 128, 3, device="cuda")
+    result = resize_image_batch(image, 24, 16, "center_crop", compute_device="cpu")[0]
+    assert result.untyped_storage().nbytes() == result.numel() * result.element_size()
+    assert torch.equal(result, image[:, 24:40, 52:76].cpu())
+
+
 @pytest.mark.parametrize("device", DEVICES)
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16, torch.float64])
 def test_pad_to_multiple_preserves_dtype_device_and_ignores_precision(device, dtype):
@@ -481,10 +489,48 @@ def test_vertical_filter_matches_horizontal_under_transpose(method):
 
 
 def test_auto_chunk_budget_and_explicit_override():
-    auto = choose_chunk_size(121, 3, (1080,1920), (576,1024), (576,1024), 0, True)
-    assert 1 < auto < 121
-    assert choose_chunk_size(121,3,(1080,1920),(576,1024),(576,1024),32,True) == 32
-    assert choose_chunk_size(121,3,(1080,1920),(576,1024),(576,1024),0,False) == 121
+    import utils.resize_kernels as kernels
+
+    for custom in (False, True):
+        working_bytes = kernels.estimate_frame_working_bytes(
+            3, (1080, 1920), (576, 1024), (576, 1024), custom, 4,
+        )
+        assert 1 < choose_chunk_size(121, 0, working_bytes, custom) < 121
+        assert choose_chunk_size(121, 32, working_bytes, custom) == 32
+
+
+def test_native_auto_chunking_matches_whole_batch(monkeypatch):
+    import utils.resize_kernels as kernels
+
+    image = torch.rand(5, 13, 17, 3)
+    settings = {"width": 11, "height": 9, "method": "bicubic"}
+    expected = resize_image_batch(image, **settings, chunk_size=5)[0]
+    interpolate = kernels.resize_native
+    batch_sizes = []
+
+    def record_chunk(batch, *args):
+        batch_sizes.append(len(batch))
+        return interpolate(batch, *args)
+
+    monkeypatch.setattr(kernels, "resize_native", record_chunk)
+    monkeypatch.setattr(kernels, "RESIZE_WORKING_BYTES", 2 * (13 * 17 + 2 * 9 * 11) * 3 * 4)
+    actual = resize_image_batch(image, **settings)[0]
+    assert batch_sizes == [2, 2, 1]
+    torch.testing.assert_close(actual, expected)
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_tiled_custom_filter_matches_full_planes(device, monkeypatch):
+    import utils.resize_kernels as kernels
+
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA unavailable")
+    image = torch.rand(2, 15, 21, 3, device=device)[:, ::2, ::2]
+    settings = {"width": 23, "height": 5, "method": "lanczos3", "chunk_size": 2}
+    expected = resize_image_batch(image, **settings)[0]
+    monkeypatch.setattr(kernels, "FILTER_SAMPLE_BYTES", 512)
+    actual = resize_image_batch(image, **settings)[0]
+    torch.testing.assert_close(actual, expected, atol=0, rtol=0)
 
 
 @pytest.mark.parametrize("kwargs", [{"width":0},{"height":-1},{"multiple_of":0},{"width":True},{"chunk_size":-1},{"chunk_size":1.5},{"method":"fake"},{"resize_mode":"fake"},{"precision":"fake"},{"antialias":"true"}])

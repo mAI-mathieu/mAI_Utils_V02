@@ -18,9 +18,8 @@ RESIZE_MODES = (
     "pad_to_multiple", "center_crop", "pad_to_multiple_edge",
 )
 PIXEL_PRESERVING_MODES = ("pad_to_multiple", "pad_to_multiple_edge", "center_crop")
-# Custom passes hold only one sampled plane per tap. Bound their batch working
-# set conservatively, independently of free VRAM, without probing for OOM.
-CUSTOM_WORKING_BYTES = 512 * 1024 * 1024
+RESIZE_WORKING_BYTES = 512 * 1024 * 1024
+FILTER_SAMPLE_BYTES = 64 * 1024 * 1024
 
 
 def _positive_integer(value, name):
@@ -155,16 +154,22 @@ def _filter_axis(x, axis, table):
         return x
     indices, weights = table
     shape = list(x.shape)
-    shape[axis] = indices.shape[1]
+    positions = indices.shape[1]
+    shape[axis] = positions
     result = x.new_zeros(shape)
     broadcast = [1] * x.ndim
-    broadcast[axis] = indices.shape[1]
-    # A small loop over taps, never frames/pixels. index_select plus addcmul
-    # avoids materializing [B,C,H,W,taps] and keeps accumulation in FP32/FP64.
-    for tap in range(indices.shape[0]):
-        sampled = x.index_select(axis, indices[tap])
-        result.addcmul_(sampled, weights[tap].view(broadcast))
-        del sampled
+    bytes_per_position = (x.numel() // x.shape[axis]) * x.element_size()
+    tile_size = max(1, FILTER_SAMPLE_BYTES // bytes_per_position)
+    # Write directly into the pass output, with one sampled tile per tap.
+    for start in range(0, positions, tile_size):
+        length = min(tile_size, positions - start)
+        stop = start + length
+        tile = result.narrow(axis, start, length)
+        broadcast[axis] = length
+        for tap in range(indices.shape[0]):
+            sampled = x.index_select(axis, indices[tap, start:stop])
+            tile.addcmul_(sampled, weights[tap, start:stop].view(broadcast))
+            del sampled
     return result
 
 
@@ -223,22 +228,25 @@ def resolve_output_dtype(input_dtype, precision):
     return dtypes[precision]
 
 
-def choose_chunk_size(batch, channels, source_size, resize_size, output_size,
-                      chunk_size, custom, element_size=4):
+def estimate_frame_working_bytes(channels, source_size, resize_size, output_size,
+                                 custom, element_size):
+    sh, sw = source_size
+    rh, rw = resize_size
+    oh, ow = output_size
+    # Allow for input transfer/cast, interpolation output and geometry/dtype copies.
+    pixels = sh * sw + rh * rw + oh * ow
+    if custom:
+        pixels += min(sh * rw, rh * sw)
+    return channels * pixels * element_size
+
+
+def choose_chunk_size(batch, chunk_size, frame_working_bytes, custom):
     if isinstance(chunk_size, bool) or not isinstance(chunk_size, Integral) or chunk_size < 0:
         raise ValueError("chunk_size must be an integer >= 0.")
     if chunk_size:
         return min(batch, int(chunk_size))
-    if not custom:
-        return batch
-    sh, sw = source_size
-    rh, rw = resize_size
-    oh, ow = output_size
-    intermediate = min(sh * rw, rh * sw)
-    # Source cast + inter-pass storage + sampled/output planes + geometry/cast.
-    pixels = sh*sw + intermediate + 3*max(intermediate, rh*rw) + oh*ow
-    per_frame = channels * pixels * element_size
-    return min(batch, max(1, CUSTOM_WORKING_BYTES // per_frame))
+    budget = RESIZE_WORKING_BYTES - (FILTER_SAMPLE_BYTES if custom else 0)
+    return min(batch, max(1, budget // frame_working_bytes))
 
 
 @torch.inference_mode()
@@ -267,23 +275,29 @@ def resize_image_batch(image, width, height, resize_mode="exact", method="auto",
     custom = method_used in CUSTOM_METHODS
     work_dtype = (torch.float64 if dtype == torch.float64 else torch.float32) if custom else dtype
     size = (geometry.resize_height, geometry.resize_width)
-    chunks = choose_chunk_size(image.shape[0], image.shape[3], image.shape[1:3], size,
-                               (geometry.height, geometry.width), chunk_size, custom,
-                               8 if work_dtype == torch.float64 else 4)
-    identity = same_size and image.shape[1:3] == (geometry.height, geometry.width)
+    output_size = (geometry.height, geometry.width)
+    output_frame_bytes = geometry.height * geometry.width * image.shape[3] * dtype.itemsize
+    if resize_mode == "center_crop":
+        frame_working_bytes = output_frame_bytes
+    else:
+        frame_working_bytes = estimate_frame_working_bytes(
+            image.shape[3], image.shape[1:3], size, output_size, custom, max(4, work_dtype.itemsize),
+        )
+    chunks = choose_chunk_size(image.shape[0], chunk_size, frame_working_bytes, custom)
+    identity = same_size and image.shape[1:3] == output_size
     if identity and device == image.device and dtype == image.dtype:
         return image, geometry.width, geometry.height, "identity"
+    if resize_mode == "center_crop" and device == image.device and (not chunk_size or chunks == len(image)):
+        cropped = _finish_geometry(image.permute(0, 3, 1, 2), geometry, resize_mode)
+        return cropped.permute(0, 2, 3, 1), geometry.width, geometry.height, "identity"
     from .gpu_memory import gpu_memory_scope
 
     # Budget output plus conversion/filter scratch. This is a conservative
     # estimate for model offloading, not a guarantee or an OOM-driven selector.
-    sh, sw = image.shape[1:3]
-    rh, rw = size
-    output_element_size = {torch.float16: 2, torch.bfloat16: 2, torch.float32: 4, torch.float64: 8}[dtype]
-    output_bytes = image.shape[0] * geometry.height * geometry.width * image.shape[3] * output_element_size
-    intermediate = min(sh * rw, rh * sw)
-    pixels = sh * sw + intermediate + 3 * max(intermediate, rh * rw) + geometry.height * geometry.width
-    scratch_bytes = chunks * image.shape[3] * pixels * (8 if work_dtype == torch.float64 else 4)
+    output_bytes = image.shape[0] * output_frame_bytes
+    scratch_bytes = 0 if identity else chunks * frame_working_bytes
+    if custom:
+        scratch_bytes += min(FILTER_SAMPLE_BYTES, scratch_bytes)
     cleanup_device = device if device.type == "cuda" else image.device
     required = output_bytes + scratch_bytes if device.type == "cuda" else 0
     with gpu_memory_scope(cleanup_device, required):
@@ -304,6 +318,9 @@ def _resize_prepared(image, device, dtype, work_dtype, geometry, resize_mode,
         )
 
     def process(batch):
+        if resize_mode == "center_crop":
+            cropped = _finish_geometry(batch.permute(0, 3, 1, 2), geometry, resize_mode)
+            return cropped.permute(0, 2, 3, 1).to(device=device)
         x = batch.to(device=device, dtype=work_dtype).permute(0, 3, 1, 2)
         if custom:
             x = resize_separable(x, tables, horizontal_first)

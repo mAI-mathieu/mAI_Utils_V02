@@ -78,6 +78,35 @@ def test_nonfinite_frames_rejected_and_out_of_range_pixels_clipped():
     torch.testing.assert_close(_pack_nv12(image,2,2),_pack_nv12(image.clamp(0,1),2,2))
 
 
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("channels", [1, 3, 4])
+def test_nv12_row_bands_match_whole_frame_at_odd_boundaries(device, channels, monkeypatch):
+    import utils.video_encoding as encoding
+
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA unavailable")
+    frames = torch.rand(3, 17, 13, channels, device=device, dtype=torch.float16)[:, ::2, ::2]
+    _, width, height = get_video_dimensions(frames)
+    expected = _pack_nv12(frames, width, height)
+    monkeypatch.setattr(encoding, "NV12_SCRATCH_BYTES", 3 * width * 5 * encoding.NV12_SCRATCH_BYTES_PER_PIXEL)
+    assert encoding._nv12_band_height(len(frames), width) == 4
+    assert torch.equal(_pack_nv12(frames, width, height), expected)
+    frames[:, -1, -1, -1] = float("nan")
+    with pytest.raises(ValueError, match="non-finite"):
+        _pack_nv12(frames, width, height)
+
+
+def test_auto_video_chunk_size_accounts_for_conversion_and_source_dtype():
+    from utils.video_encoding import _video_chunk_size
+
+    options = VideoEncodeOptions()
+    rgb = torch.empty(10, 2160, 3840, 3, device="meta")
+    assert _video_chunk_size(rgb, 3840, 2160, options) == 1
+    hd = torch.empty(10, 1080, 1920, 4, device="meta")
+    assert _video_chunk_size(hd, 1920, 1080, options) > _video_chunk_size(hd.double(), 1920, 1080, options)
+    assert _video_chunk_size(rgb, 3840, 2160, replace(options, chunk_size=3)) == 3
+
+
 @pytest.mark.parametrize("color,yuv", [
     ((0,0,0),(16,128,128)), ((1,1,1),(235,128,128)),
     ((1,0,0),(63,102,240)), ((0,1,0),(173,42,26)),

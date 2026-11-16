@@ -55,7 +55,10 @@ and cover replacement players, source changes, node isolation and cleanup.
 2. Determine output count/FPS timing, including ping-pong and repeats. Sequence
    indices are generated per chunk, without constructing a second full batch.
 3. Convert/clamp/quantize a batch chunk to 8-bit NV12 on its current tensor
-   device. Small odd dimensions are padded to the next even size. FP32 work
+   device. Automatic chunk sizing estimates conversion, selection and packed
+   buffers with a 256 MiB target and a 1–32 frame range. Large chunks and
+   single frames are processed in even-height bands targeting 128 MiB of
+   conversion scratch. Odd dimensions are padded to the next even size. FP32 work
    handles RGB-to-limited-range BT.709 conversion, with box-filtered 2×2 chroma
    sampling. Luma/chroma use SDR ranges 16–235 / 16–240, respectively.
 4. Transfer that packed chunk to CPU and stream a zero-copy NumPy byte view
@@ -99,10 +102,9 @@ differ from the same NVENC CQ number. If fallback fails, both diagnostics are
 reported. Invalid inputs, filesystem errors and cancellation propagate without
 starting fallback.
 
-Automatic chunks target 64 MiB of packed NV12 (up to 32 frames), not a strict
-total-memory limit. Float conversion, source slices, selected indices and
-encoder buffers consume additional memory. User-selected chunk size can use
-more memory. Full frames stay allocated by ComfyUI. Interrupted execution is
+The chunk and band targets are estimates. Manual chunks may need larger
+selection and packed buffers. The encoder has its own memory requirements,
+and ComfyUI retains the full input batch. Interrupted execution is
 checked between chunks and while draining the encoder; a blocking pipe write
 must finish or fail before another cancellation check can run.
 
@@ -110,10 +112,10 @@ must finish or fail before another cancellation check can run.
 
 Both GPU nodes share `utils/gpu_memory.py`. Before work, garbage collection,
 device synchronization and `torch.cuda.empty_cache()` return unused allocator
-memory to the driver. For encoding, the node requests an estimated 48 bytes per
-pixel per conversion frame and 2 GiB of headroom for FFmpeg's separate CUDA
-context. Only when driver-visible free memory is below the budget does it call
-ComfyUI's `free_memory` hook to offload models on that device. The hook's
+memory to the driver. For encoding, the node estimates peak band scratch,
+packed NV12 and any frame selection buffers, plus 2 GiB of headroom for
+FFmpeg's separate CUDA context. Only when driver-visible free memory is below
+the budget does it call ComfyUI's `free_memory` hook to offload models on that device. The hook's
 reclaimable-cache accounting is adjusted so that external CUDA context memory
 is not confused with cached PyTorch memory. No ComfyUI core code is changed.
 

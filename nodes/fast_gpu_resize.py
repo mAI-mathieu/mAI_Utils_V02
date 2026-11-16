@@ -71,7 +71,7 @@ class MAIFastGPUResize:
             "precision": (["auto", "fp32", "fp16", "bf16"], {"default": "auto",
                                                                     "tooltip": "Output dtype for resizing. Ignored in pad_to_multiple, pad_to_multiple_edge and center_crop to preserve original pixel values and dtype."}),
             "chunk_size": ("INT", {"default": 0, "min": 0, "max": 1000000,
-                                   "tooltip": "0: whole batch for native modes, automatic memory-bounded chunks for custom kernels. Positive: frames per chunk."}),
+                                   "tooltip": "0: choose frames per chunk based on estimated working memory. Positive: set frames per chunk."}),
         }, "optional": {
             "mask": ("MASK", {"tooltip": "Source-size mask transformed with the image. One mask broadcasts across an image batch. If omitted, outputs a zero mask at the output size."}),
             "fill_color": ("STRING", {"default": "#000000",

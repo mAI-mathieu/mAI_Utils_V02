@@ -86,18 +86,15 @@ FP16/BF16 custom calculations use FP32 positions, weights and accumulation;
 FP64 output uses FP64 work. Only final reconstruction is clamped to [0,1].
 The output is cast to the requested dtype and permuted back to BHWC.
 
-A small Python loop applies kernel taps to whole tensor batches using
-`index_select` and `addcmul_`. It holds only one sampled plane at a time rather
-than allocating a tensor with a taps dimension across all image pixels. Chunking
-uses slices along the batch axis and writes into a preallocated output, preserving
-order and avoiding a full-output `cat` copy. There are no per-frame or per-pixel
-Python loops and no PIL, OpenCV, NumPy, SciPy or CPU image-conversion path.
+Custom filter passes use `index_select` and `addcmul_` to accumulate each tap
+directly into the pass output. Large passes sample tiles targeting 64 MiB of
+temporary storage. Batch chunks write into a preallocated output in frame order.
+Center crop slices the source before any device transfer.
 
-Auto chunking uses a conservative 512 MiB estimate for custom working data,
-including source casts, intermediate planes and geometry/output casts. This is
-an estimate, not a strict allocator limit. The full input/output are additional;
-one very large frame can exceed the estimate. Native methods process the whole
-batch at chunk size 0, so explicit chunking can also reduce their working memory.
+Auto chunking targets 512 MiB of working data for native and custom methods.
+The estimate includes source casts, intermediate planes, geometry/output casts
+and custom sampling scratch. The full input and output still need to fit in
+memory, and one very large frame can exceed the estimate.
 
 GPU execution now uses `utils/gpu_memory.py` to release unused CUDA cache before
 work and after success/failure/cancellation. It estimates full output plus chunk
@@ -185,5 +182,4 @@ and pathlib in the benchmark; a Linux host was not available for validation.
 
 Alpha is resized independently without premultiplication. CPU `auto` stays on
 CPU. Full output allocation, extreme fill intermediates and substantial
-downscale tap counts remain limits even with chunking. No models are unloaded
-or moved by this node.
+downscale tap counts remain limits even with chunking.
