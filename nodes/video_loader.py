@@ -26,19 +26,37 @@ class MAIVideoLoader:
         return {
             "required": {
                 "video": (sorted(videos), {"video_upload": True}),
-            }
+            },
+            "optional": {
+                "frame_limit": (
+                    "INT",
+                    {
+                        "default": -1,
+                        "min": -1,
+                        "max": 2147483647,
+                        "tooltip": "Keep the first N frames. Use -1 for all frames. Zero is not valid.",
+                    },
+                ),
+            },
         }
 
-    def load_video(self, video):
+    def load_video(self, video, frame_limit=-1):
+        if frame_limit < -1 or frame_limit == 0:
+            raise ValueError("frame_limit must be -1 (all frames) or a positive integer.")
+
         import folder_paths
         from comfy_api.latest import InputImpl
 
         video_path = folder_paths.get_annotated_filepath(video)
         components = InputImpl.VideoFromFile(video_path).get_components()
-        frame_count, width, height = get_frame_batch_info(components.images)
+        frames = components.images
+        frame_count, width, height = get_frame_batch_info(frames)
+        if 0 < frame_limit < frame_count:
+            frames = frames[:frame_limit]
+            frame_count = frame_limit
 
         return (
-            components.images,
+            frames,
             float(components.frame_rate),
             components.audio,
             frame_count,
@@ -47,7 +65,7 @@ class MAIVideoLoader:
         )
 
     @classmethod
-    def IS_CHANGED(cls, video):
+    def IS_CHANGED(cls, video, frame_limit=-1):
         import folder_paths
 
         video_path = folder_paths.get_annotated_filepath(video)

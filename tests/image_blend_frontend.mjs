@@ -15,6 +15,7 @@ class Node {
         { name: "blend_mode", value: "normal" },
         { name: "blend_percentage", value: 50 },
         { name: "blend_list", value: "", hidden: true },
+        { name: "detail_scale", value: 2 },
     ];
 
     onConfigure() {
@@ -36,12 +37,13 @@ assert.equal(Node.prototype.onConfigure, original);
 extension.beforeRegisterNodeDef(Node, { name: "MAIImageBlend" });
 
 for (const [values, inputs, expected, legacyHidden] of [
-    [[], [], ["normal", 50, ""], true],
-    [["25.75%,\n"], [], ["normal", 25.75, ""], true],
-    [["0%, 50%, 100%"], [], ["normal", 50, "0%, 50%, 100%"], false],
-    [[null], [{ name: "blend_list", link: 8 }], ["normal", 50, ""], false],
-    [["multiply", 33.33, ""], [], ["multiply", 33.33, ""], true],
-    [["normal", 50, "0%, 50%, 100%"], [], ["normal", 50, "0%, 50%, 100%"], false],
+    [[], [], ["normal", 50, "", 2], true],
+    [["25.75%,\n"], [], ["normal", 25.75, "", 2], true],
+    [["0%, 50%, 100%"], [], ["normal", 50, "0%, 50%, 100%", 2], false],
+    [[null], [{ name: "blend_list", link: 8 }], ["normal", 50, "", 2], false],
+    [["multiply", 33.33, ""], [], ["multiply", 33.33, "", 2], true],
+    [["normal", 50, "0%, 50%, 100%"], [], ["normal", 50, "0%, 50%, 100%", 2], false],
+    [["high_frequency", 25, "", 3.1], [], ["high_frequency", 25, "", 3.1], true],
 ]) {
     const widgets = configure(values, inputs);
     assert.deepEqual(widgets.map(({ value }) => value), expected);

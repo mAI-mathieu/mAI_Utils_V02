@@ -1240,8 +1240,9 @@ Automated tests: `python -m pytest tests/test_image_batch.py tests/test_image_ga
 Find **mAI image blend** under `mAI / Image`. It is registered as `MAIImageBlend`.
 
 Connect a single image or an IMAGE batch to each of `image_top` and `image_bottom`.
-Choose `normal`, `multiply`, `screen`, `overlay`, `soft_light`, or `difference`
-in the `blend_mode` dropdown. Set the `blend_percentage` float from `0` to `100`.
+Choose `normal`, `multiply`, `screen`, `overlay`, `soft_light`, `difference`,
+`high_frequency`, or `low_frequency` in the `blend_mode` dropdown. Set the
+`blend_percentage` float from `0` to `100`.
 At `0` the output is the bottom image. At `100` it is the full result of the
 selected mode. The defaults are `normal` and `50.0`, which blend the images equally.
 
@@ -1249,14 +1250,37 @@ The same percentage applies to every frame in the `images` output batch.
 A single image repeats across the other batch. Two batches must have matching
 frame counts. Images must share height, width, and channel count.
 
+For video upscale, connect the model upscale to `image_top` and the aligned
+Lanczos upscale to `image_bottom`. The frequency modes use a Gaussian blur to
+split the difference between the two inputs into broad tones and fine detail.
+
+- `high_frequency` transfers the model's fine luminance detail while keeping
+  the Lanczos color and broad shading. Near saturated pixels, the node limits
+  the luminance adjustment to keep RGB values in range.
+- `low_frequency` transfers the model's broad colors and shading while keeping
+  the Lanczos fine detail.
+
+`detail_scale` is the Gaussian spread in output pixels (default `2.0`, range
+`0.1–32.0`). Increasing it lets `high_frequency` transfer broader detail and
+limits `low_frequency` to smoother tone changes. The two modes preserve the
+bottom alpha channel and process each frame independently. Check for shimmer
+at playback speed.
+
+The node uses ComfyUI's selected CUDA GPU when available, including with CPU
+image inputs. Cross-device transfers happen one frame at a time. Successful
+CUDA processing returns the result on the bottom image's device. ComfyUI CPU
+mode, unavailable CUDA, or a reported CUDA failure uses CPU processing and
+returns a CPU batch.
+
 Older workflows migrate a single saved percentage into the float. A saved or
 connected percentage list remains available on that node. Clear or disconnect
 the legacy `blend_list` to use the float for the whole batch.
 
 To try it in ComfyUI, restart, add the node, and connect two same-size Load
-Image outputs and a Preview Image node. Try `multiply` at `100`, and then use
-`50` to mix that result halfway with the bottom image. For the automated tests,
-run `python -m pytest tests/test_image_blend.py` and `node tests/image_blend_frontend.mjs`.
+Image outputs or two aligned upscaled clips. Try `high_frequency` at `25%`
+with a `detail_scale` of `2.0`, then preview the `images` output in motion.
+For automated tests, run `python -m pytest tests/test_image_blend.py` and
+`node tests/image_blend_frontend.mjs`.
 
 ## mAI image gate
 
@@ -1660,26 +1684,25 @@ Known limitations:
 
 ## mAI video loader
 
-Location:
-
-```text
-mAI / IO
-```
+Location: `mAI / IO`. Registered as `MAIVideoLoader`.
 
 Purpose:
 Upload or select a video from ComfyUI's input directory and decode it into a
 ComfyUI image batch, along with its source metadata and audio stream.
 
-Input:
+Inputs:
 
-* `video`
+* `video` — choose or upload a video from ComfyUI's input directory.
+* `frame_limit` (optional, default `-1`) — `-1` keeps all frames. A positive
+  number keeps that many frames from the start, or all frames if the clip is
+  shorter. For example, `100` keeps the first 100 frames. `0` is invalid.
 
 Outputs, in order:
 
-* `frames` (`IMAGE`) — all decoded video frames as one image batch
+* `frames` (`IMAGE`) — the retained frames as one image batch
 * `fps` (`FLOAT`) — the video's average source frame rate
-* `audio` (`AUDIO`) — the decoded audio stream, or no value when the video has no audio
-* `frame_count` (`INT`) — the number of decoded frames
+* `audio` (`AUDIO`) — the full decoded audio stream, or no value when the video has no audio
+* `frame_count` (`INT`) — the number of frames returned
 * `width` (`INT`) — decoded frame width
 * `height` (`INT`) — decoded frame height
 
@@ -1693,11 +1716,15 @@ Default behavior:
 
 Known limitations:
 
-* The complete decoded frame sequence is held in memory; long or high-resolution
-  videos can require substantial RAM.
+* The limit is applied after decoding. Long or high-resolution videos can still
+  require substantial RAM. The limit does not trim audio.
 * Variable-frame-rate sources report their average frame rate.
 * A video without an audio stream returns no `AUDIO` value. Use **mAI audio
   fallback** with the loader's `frame_count` and `fps` for consumers that require audio.
+
+To try it, queue a video longer than 100 frames with `frame_limit` set to `100`,
+then set it back to `-1` and check that `frame_count` returns to the full length.
+Automated tests: `python -m pytest tests/test_video_loader.py`.
 
 ## mAI trim frame sequence
 

@@ -47,8 +47,17 @@ def test_node_declares_stable_output_contract():
     )
 
 
-def test_node_loads_native_comfyui_video_components(monkeypatch):
-    frames = torch.rand(7, 360, 640, 3)
+@pytest.mark.parametrize(
+    ("limit_args", "expected_count"),
+    [
+        ({}, 105),
+        ({"frame_limit": -1}, 105),
+        ({"frame_limit": 100}, 100),
+        ({"frame_limit": 200}, 105),
+    ],
+)
+def test_node_loads_native_comfyui_video_components(monkeypatch, limit_args, expected_count):
+    frames = torch.rand(105, 12, 16, 3)
     audio = {"waveform": torch.rand(1, 2, 48000), "sample_rate": 48000}
     components = SimpleNamespace(
         images=frames,
@@ -75,12 +84,18 @@ def test_node_loads_native_comfyui_video_components(monkeypatch):
     monkeypatch.setitem(sys.modules, "comfy_api", comfy_api)
     monkeypatch.setitem(sys.modules, "comfy_api.latest", comfy_api_latest)
 
-    result = MAIVideoLoader().load_video("clip.mp4")
+    result = MAIVideoLoader().load_video("clip.mp4", **limit_args)
 
-    assert result[0] is frames
+    assert torch.equal(result[0], frames[:expected_count])
     assert result[1] == pytest.approx(30000 / 1001)
     assert result[2] is audio
-    assert result[3:] == (7, 640, 360)
+    assert result[3:] == (expected_count, 16, 12)
+
+
+@pytest.mark.parametrize("frame_limit", [-2, 0])
+def test_node_rejects_invalid_frame_limits(frame_limit):
+    with pytest.raises(ValueError, match="-1 .* or a positive integer"):
+        MAIVideoLoader().load_video("clip.mp4", frame_limit)
 
 
 def test_node_preserves_missing_audio(monkeypatch):
