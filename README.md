@@ -1235,6 +1235,29 @@ existing multi-image batch, and save/reload
 the workflow. To test all inputs missing, use a downstream node accepting `None`.
 Automated tests: `python -m pytest tests/test_image_batch.py tests/test_image_gate.py`.
 
+## mAI image blend
+
+Find **mAI image blend** under `mAI / Image`. It is registered as `MAIImageBlend`.
+
+Connect a single image or an IMAGE batch to each of `image_top` and `image_bottom`.
+Choose `normal`, `multiply`, `screen`, `overlay`, `soft_light`, or `difference`
+in the `blend_mode` dropdown. Set the `blend_percentage` float from `0` to `100`.
+At `0` the output is the bottom image. At `100` it is the full result of the
+selected mode. The defaults are `normal` and `50.0`, which blend the images equally.
+
+The same percentage applies to every frame in the `images` output batch.
+A single image repeats across the other batch. Two batches must have matching
+frame counts. Images must share height, width, and channel count.
+
+Older workflows migrate a single saved percentage into the float. A saved or
+connected percentage list remains available on that node. Clear or disconnect
+the legacy `blend_list` to use the float for the whole batch.
+
+To try it in ComfyUI, restart, add the node, and connect two same-size Load
+Image outputs and a Preview Image node. Try `multiply` at `100`, and then use
+`50` to mix that result halfway with the bottom image. For the automated tests,
+run `python -m pytest tests/test_image_blend.py` and `node tests/image_blend_frontend.mjs`.
+
 ## mAI image gate
 
 Location: `mAI / Image`. Registered as `MAIImageGate`.

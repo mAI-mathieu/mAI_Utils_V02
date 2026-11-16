@@ -12,6 +12,7 @@ from .nodes.h3_to_ltx_frame_adapter import MAIH3ToLTXFrameAdapter
 from .nodes.h3_media_references import MAIH3MediaReferences
 from .nodes.image_aspect_ratio import MAIImageAspectRatio
 from .nodes.image_batch import MAIImageBatch
+from .nodes.image_blend import MAIImageBlend
 from .nodes.image_blur import MAIImageBlur
 from .nodes.image_composite_masked import MAIImageCompositeMasked
 from .nodes.image_gate import MAIImageGate
@@ -75,6 +76,7 @@ NODE_CLASS_MAPPINGS = {
     "MAIH3MediaReferences": MAIH3MediaReferences,
     "MAIImageAspectRatio": MAIImageAspectRatio,
     "MAIImageBatch": MAIImageBatch,
+    "MAIImageBlend": MAIImageBlend,
     "MAIImageBlur": MAIImageBlur,
     "MAIImageCompositeMasked": MAIImageCompositeMasked,
     "MAIImageGate": MAIImageGate,
@@ -118,6 +120,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MAIH3MediaReferences": "mAI H3 media references",
     "MAIImageAspectRatio": "mAI image aspect ratio",
     "MAIImageBatch": "mAI image batch",
+    "MAIImageBlend": "mAI image blend",
     "MAIImageBlur": "mAI image blur",
     "MAIImageCompositeMasked": "mAI image composite masked",
     "MAIImageGate": "mAI image gate",
