@@ -2261,6 +2261,23 @@ Known limitations:
 
 * There is no visible seed input, so results are intentionally not reproducible.
 
+## mAI random number
+
+Find **mAI random number** under `mAI / Utils`. It is registered as `MAIRandomNumber`.
+Set `minimum` and `maximum` in the node or connect FLOAT values to those inputs.
+They default to `0.0` and `1.0`. Both bounds are inclusive and must be finite.
+The minimum must be less than or equal to the maximum.
+
+Connect `int` (INT) for a uniformly sampled whole number in the range, or
+`float` (FLOAT) for a decimal-capable value. The two sockets draw independently
+each time the workflow is queued, so values can repeat. For a range with no
+whole number, such as `0.1` through `0.9`, only the `float` socket can be used.
+
+To test in ComfyUI, restart, add the node and connect either output to a matching
+input. Set both bounds to `5` to confirm it returns `5` on the INT socket and
+`5.0` on the FLOAT socket. Run `python -m pytest tests/test_random_number.py` for
+the automated checks.
+
 ## mAI text sequence randomizer
 
 Location:

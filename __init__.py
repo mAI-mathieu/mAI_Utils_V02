@@ -29,6 +29,7 @@ from .nodes.mask_smart_stitch import MAIMaskSmartStitch
 from .nodes.pixel_drift_fix import MAIPixelDriftFix
 from .nodes.prepare_image_for_minimax_h3 import MAIPrepareImageForMinimaxH3
 from .nodes.random_line_node import MAIRandomLine
+from .nodes.random_number import MAIRandomNumber
 from .nodes.save_text_file_node import MAISaveTextFile
 from .nodes.scheduled_lora import MAIScheduledLora
 from .nodes.stitch import MAIStitch
@@ -91,6 +92,7 @@ NODE_CLASS_MAPPINGS = {
     "MAIPixelDriftFix": MAIPixelDriftFix,
     "MAIPrepareImageForMinimaxH3": MAIPrepareImageForMinimaxH3,
     "MAIRandomLine": MAIRandomLine,
+    "MAIRandomNumber": MAIRandomNumber,
     "MAISaveTextFile": MAISaveTextFile,
     "MAIScheduledLora": MAIScheduledLora,
     "MAIStitch": MAIStitch,
@@ -133,6 +135,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MAIPixelDriftFix": "mAI pixel drift fix",
     "MAIPrepareImageForMinimaxH3": "mAI prepare image for Minimax H3",
     "MAIRandomLine": "mAI Random Line",
+    "MAIRandomNumber": "mAI random number",
     "MAISaveTextFile": "mAI Save Text File",
     "MAIScheduledLora": "mAI scheduled LoRA",
     "MAIStitch": "mAI stitch",
